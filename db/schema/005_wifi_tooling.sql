@@ -50,3 +50,22 @@ CREATE TABLE IF NOT EXISTS wifi_stability_samples (
   source_file TEXT NOT NULL,
   UNIQUE (run_id, phase, sample_group, sample_index)
 );
+
+CREATE TABLE IF NOT EXISTS wifi_backend_tests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+  phase TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  connection_name TEXT,
+  interface_name TEXT,
+  original_bssid TEXT,
+  preferred_bssid TEXT,
+  backend_config_path TEXT,
+  backup_dir TEXT,
+  rollback_script TEXT,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  UNIQUE (run_id, phase, backend)
+);

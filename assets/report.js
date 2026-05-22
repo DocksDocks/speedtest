@@ -24,6 +24,7 @@
     latencyCompare: "latency-compare",
     dnsCompare: "dns-compare",
     wifiBuiltin: "wifi-builtin",
+    wifiBackendTests: "wifi-backend-tests",
     wifiStability: "wifi-stability",
     wifiTools: "wifi-tools",
     serviceTests: "service-tests",
@@ -186,6 +187,14 @@
     return values.length ? values[0] : "";
   }
 
+  function tableExists(db, tableName) {
+    return Number(scalar(
+      db,
+      "SELECT COUNT(*) FROM sqlite_schema WHERE type IN ('table', 'view') AND name = $name;",
+      { $name: tableName },
+    )) > 0;
+  }
+
   function latestRunId(db) {
     const explicit = selectedRunId();
     if (explicit) {
@@ -326,6 +335,7 @@
         latencyCompare: latencyCompareRows(db, runId, phase),
         dnsCompare: dnsCompareRows(db, runId, phase),
         wifiBuiltin: wifiBuiltinRows(db, runId),
+        wifiBackendTests: wifiBackendRows(db, runId),
         wifiStability: wifiStabilityRows(db, runId),
         wifiTools: wifiToolRows(db, runId),
         serviceTests: serviceRows(db, runId, phase),
@@ -476,6 +486,33 @@
         ON c.tool_key = l.tool_key
        AND c.category = l.category
       ORDER BY l.sort_order;
+      `,
+      { $run_id: runId },
+    );
+  }
+
+  function wifiBackendRows(db, runId) {
+    if (!tableExists(db, "wifi_backend_tests")) {
+      return [];
+    }
+
+    return rows(
+      db,
+      `
+      SELECT
+        backend AS Backend,
+        phase AS Phase,
+        status AS Status,
+        connection_name AS Connection,
+        interface_name AS Interface,
+        COALESCE(original_bssid, 'n/a') AS "Original BSSID",
+        COALESCE(preferred_bssid, 'n/a') AS "Preferred BSSID",
+        started_at AS Started,
+        COALESCE(finished_at, 'n/a') AS Finished,
+        notes AS Notes
+      FROM wifi_backend_tests
+      WHERE run_id = $run_id
+      ORDER BY started_at DESC, backend;
       `,
       { $run_id: runId },
     );

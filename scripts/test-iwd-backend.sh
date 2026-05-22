@@ -2,8 +2,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/path.sh
-. "$SCRIPT_DIR/lib/path.sh"
+# shellcheck source=lib/sqlite.sh
+. "$SCRIPT_DIR/lib/sqlite.sh"
 
 RUN_DIR="${1:-$(speedtest_default_run_dir)}"
 DB_PATH="${2:-$(speedtest_default_db)}"
@@ -40,6 +40,8 @@ LOG_FILE="$RUN_DIR/iwd-backend-test.log"
 ROLLBACK_SCRIPT="$RUN_DIR/iwd-rollback.sh"
 ORIGINAL_BSSID=""
 RESTORE_DONE=0
+ROLLBACK_READY=0
+BACKEND_TEST_STATUS="started"
 
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -80,10 +82,14 @@ printf '%s\n' "Rollback complete."
 EOF
 
   chmod +x "$ROLLBACK_SCRIPT"
+  ROLLBACK_READY=1
 }
 
 restore_backend() {
   if [ "$RESTORE_DONE" -eq 1 ]; then
+    return
+  fi
+  if [ "$ROLLBACK_READY" -ne 1 ] || [ ! -x "$ROLLBACK_SCRIPT" ]; then
     return
   fi
 
@@ -94,6 +100,52 @@ restore_backend() {
 
   "$ROLLBACK_SCRIPT" >> "$LOG_FILE" 2>&1 || true
   RESTORE_DONE=1
+}
+
+record_backend_test() {
+  sqlite_exec "$DB_PATH" "
+  INSERT INTO wifi_backend_tests (
+    run_id,
+    phase,
+    backend,
+    connection_name,
+    interface_name,
+    original_bssid,
+    preferred_bssid,
+    backend_config_path,
+    backup_dir,
+    rollback_script,
+    status,
+    notes
+  ) VALUES (
+    '$(sql_quote "$RUN_ID")',
+    'wifi-iwd-experiments',
+    'iwd',
+    '$(sql_quote "$CONNECTION_NAME")',
+    '$(sql_quote "$IFACE")',
+    NULLIF('$(sql_quote "$ORIGINAL_BSSID")', ''),
+    NULLIF('$(sql_quote "$PREFERRED_BSSID")', ''),
+    '$(sql_quote "$IWD_CONF")',
+    '$(sql_quote "$BACKUP_DIR")',
+    '$(sql_quote "$ROLLBACK_SCRIPT")',
+    '$(sql_quote "$BACKEND_TEST_STATUS")',
+    '$(sql_quote "${1:-}")'
+  )
+  ON CONFLICT(run_id, phase, backend) DO UPDATE SET
+    connection_name = excluded.connection_name,
+    interface_name = excluded.interface_name,
+    original_bssid = excluded.original_bssid,
+    preferred_bssid = excluded.preferred_bssid,
+    backend_config_path = excluded.backend_config_path,
+    backup_dir = excluded.backup_dir,
+    rollback_script = excluded.rollback_script,
+    status = excluded.status,
+    finished_at = CASE
+      WHEN excluded.status IN ('rolled_back', 'failed') THEN CURRENT_TIMESTAMP
+      ELSE wifi_backend_tests.finished_at
+    END,
+    notes = excluded.notes;
+  "
 }
 
 finish_ownership() {
@@ -112,6 +164,19 @@ need_command NetworkManager
 need_command "$SQLITE_BIN"
 
 mkdir -p "$BACKUP_DIR"
+speedtest_init_schema "$DB_PATH"
+
+sqlite_exec "$DB_PATH" "
+INSERT OR IGNORE INTO runs (run_id, started_at, run_dir, connection_name, interface_name, notes)
+VALUES (
+  '$(sql_quote "$RUN_ID")',
+  '$(date -Is 2>/dev/null || date)',
+  '$(sql_quote "$RUN_DIR")',
+  '$(sql_quote "$CONNECTION_NAME")',
+  '$(sql_quote "$IFACE")',
+  'iwd backend test'
+);
+"
 
 {
   printf '%s\n' "Started: $(date)"
@@ -139,6 +204,8 @@ if [ -z "$ORIGINAL_BSSID" ]; then
 fi
 printf '%s\n' "Effective preferred BSSID: $PREFERRED_BSSID" >> "$LOG_FILE"
 write_rollback_script
+BACKEND_TEST_STATUS="rollback_ready"
+record_backend_test "rollback script written before backend switch"
 
 if [ -f "$IWD_CONF" ]; then
   cp "$IWD_CONF" "$BACKUP_DIR/90-speedtest-iwd.conf.before"
@@ -148,6 +215,8 @@ fi
   printf '%s\n' "[$(date)] Starting iwd service"
 } >> "$LOG_FILE"
 systemctl start iwd.service >> "$LOG_FILE" 2>&1
+BACKEND_TEST_STATUS="iwd_started"
+record_backend_test "iwd service start requested"
 
 cat > "$IWD_CONF" <<EOF
 [device]
@@ -164,6 +233,8 @@ EOF
 
 systemctl restart NetworkManager >> "$LOG_FILE" 2>&1
 sleep 10
+BACKEND_TEST_STATUS="networkmanager_iwd"
+record_backend_test "NetworkManager restarted with iwd backend config"
 
 {
   printf '%s\n' "[$(date)] Bringing up $CONNECTION_NAME on iwd backend"
@@ -172,6 +243,8 @@ sleep 10
 nmcli connection modify "$CONNECTION_NAME" 802-11-wireless.bssid "$PREFERRED_BSSID" >> "$LOG_FILE" 2>&1
 nmcli connection up "$CONNECTION_NAME" >> "$LOG_FILE" 2>&1
 sleep 12
+BACKEND_TEST_STATUS="connected_iwd"
+record_backend_test "connection up requested on iwd backend"
 
 NetworkManager --print-config > "$BACKUP_DIR/networkmanager-print-config-iwd.txt" 2>&1 || true
 systemctl is-active iwd.service > "$BACKUP_DIR/iwd-active.txt" 2>&1 || true
@@ -193,6 +266,8 @@ PREFERRED_BSSID="$PREFERRED_BSSID" \
 "$SCRIPT_DIR/run-wifi-stability-bssid-ab.sh" "$RUN_DIR" "$DB_PATH" >> "$LOG_FILE" 2>&1
 
 restore_backend
+BACKEND_TEST_STATUS="rolled_back"
+record_backend_test "rollback completed after iwd sample"
 NetworkManager --print-config > "$BACKUP_DIR/networkmanager-print-config-after-rollback.txt" 2>&1 || true
 nmcli -f ACTIVE,SSID,BSSID,CHAN,FREQ,RATE,SIGNAL,BARS,SECURITY device wifi list --rescan no > "$BACKUP_DIR/nmcli-wifi-list-after-rollback.txt" 2>&1 || true
 

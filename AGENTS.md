@@ -7,6 +7,7 @@
 - Shared shell libraries: `scripts/lib/path.sh`, `scripts/lib/sqlite.sh`, `scripts/lib/classification.sh`, `scripts/lib/report.sh`.
 - SQLite schema: `db/schema/*.sql`; seed/default data: `db/defaults/*.sql`, `db/seed.sql`.
 - Browser report: `index.html`, `assets/report.css`, `assets/report.js`.
+- Project-local skills: `.agents/skills/sqlite3-quality/SKILL.md`, `.agents/skills/bash-diagnostics/SKILL.md`.
 - Generated/private data: `logs/*`, `logs/*.sqlite*`, `data/*`, `reports/*.html`.
 
 ## Architecture Rules
@@ -20,6 +21,7 @@
 
 ## SQLite Rules
 
+- Use `.agents/skills/sqlite3-quality/SKILL.md` before changing schema, queries, sqlite3 CLI usage, report publishing, or browser SQLite rendering.
 - Use `scripts/lib/sqlite.sh` helpers for shell writes so `PRAGMA foreign_keys = ON` and a 5000 ms CLI timeout are applied per connection.
 - Keep WAL for the local working DB; convert the browser snapshot to rollback-journal mode in `scripts/publish-report-db.sh`.
 - Run schema changes through `scripts/init-db.sh`; do not mutate `logs/speedtest.sqlite` manually in docs or scripts.
@@ -27,6 +29,7 @@
 
 ## Shell Rules
 
+- Use `.agents/skills/bash-diagnostics/SKILL.md` before changing collection, ingestion, report, rollback, NetworkManager, or iwd scripts.
 - Source `scripts/lib/path.sh` or `scripts/lib/sqlite.sh` for project paths; do not hard-code absolute user paths.
 - Detect Wi-Fi interface/profile with `speedtest_default_wifi_iface` and `speedtest_default_connection_name`.
 - Site-specific values such as SSID, BSSID, DNS search domain, or local gateway must be env vars or DB data, not committed defaults.

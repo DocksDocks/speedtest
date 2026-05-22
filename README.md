@@ -53,6 +53,15 @@ to auto-select a local file by path, so direct-open mode needs that click.
 
 SQLite helpers in `scripts/lib/sqlite.sh` enable foreign keys per connection, use a busy timeout, initialize the database in WAL mode for local writes, and optimize planner stats after schema work.
 
+## Agent Skills
+
+Project-local agent skills live under `.agents/skills/`:
+
+- `sqlite3-quality`: SQLite schema, query, sqlite3 CLI, and browser snapshot rules.
+- `bash-diagnostics`: Bash collection, rollback, NetworkManager, and SQLite-writing script rules.
+
+Use those before changing database or script behavior; they encode the privacy and report-generation patterns specific to this repo.
+
 ## Common Commands
 
 Initialize or migrate the local DB:

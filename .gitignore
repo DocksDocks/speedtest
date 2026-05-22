@@ -1,0 +1,20 @@
+# Generated databases
+logs/*.sqlite
+logs/*.sqlite-*
+*.sqlite
+*.sqlite-*
+
+# Generated run logs and reports
+logs/*/
+reports/*.html
+data/*
+
+# Keep directory placeholders
+!logs/.gitkeep
+!reports/.gitkeep
+!data/.gitkeep
+
+# Local scratch
+.env
+*.tmp
+*.bak

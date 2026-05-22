@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Speed Report</title>
+  <link rel="stylesheet" href="assets/report.css">
+</head>
+<body>
+<main class="page">
+  <header>
+    <div>
+      <h1>Network Speed Report</h1>
+      <p class="subtitle">A focused before-to-current view of local network tuning. Publish a local SQLite snapshot to <code>data/report.sqlite</code>, then serve this directory to populate the viewer.</p>
+    </div>
+    <aside class="run-meta" id="run-meta">
+      <span><strong>Run</strong> <span>no data</span></span>
+      <span><strong>Comparison</strong> <span>before -&gt; current</span></span>
+      <span><strong>Status</strong> <span>waiting for export</span></span>
+    </aside>
+  </header>
+
+  <section class="tabs">
+    <input class="tab-input" type="radio" name="tabs" id="tab-summary" checked>
+    <input class="tab-input" type="radio" name="tabs" id="tab-details">
+    <input class="tab-input" type="radio" name="tabs" id="tab-evidence">
+    <input class="tab-input" type="radio" name="tabs" id="tab-glossary">
+    <nav class="tab-list" aria-label="Report sections">
+      <label class="tab-label" for="tab-summary">Summary</label>
+      <label class="tab-label" for="tab-details">Details</label>
+      <label class="tab-label" for="tab-evidence">Evidence</label>
+      <label class="tab-label" for="tab-glossary">Glossary & Next Steps</label>
+    </nav>
+
+    <div class="tab-panels">
+      <section class="tab-panel" id="panel-summary">
+        <div id="summary-cards" class="comparison-grid"></div>
+        <section class="section panel">
+          <h2>What Changed</h2>
+          <p id="change-summary">Export local SQLite data to render the current machine's settings and measurements.</p>
+        </section>
+        <section class="section">
+          <h2>Before -> Current</h2>
+          <div id="speed-compare" class="table-wrap"></div>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="panel-details">
+        <section class="section"><h2>Latency Before -> Current</h2><div id="latency-compare" class="table-wrap"></div></section>
+        <section class="section"><h2>DNS Before -> Current</h2><div id="dns-compare" class="table-wrap"></div></section>
+        <section class="section"><h2>Built-In Wi-Fi Snapshot</h2><div id="wifi-builtin" class="table-wrap"></div></section>
+        <section class="section"><h2>Wi-Fi Stability And BSSID A/B</h2><div id="wifi-stability" class="table-wrap"></div></section>
+        <section class="section"><h2>Wi-Fi Tool Tests</h2><div id="wifi-tools" class="table-wrap"></div></section>
+        <section class="section"><h2>Services You Use</h2><div id="service-tests" class="table-wrap"></div></section>
+      </section>
+
+      <section class="tab-panel" id="panel-evidence">
+        <section class="section panel">
+          <h2>Raw Evidence Stored</h2>
+          <p id="evidence-summary">Raw logs stay in local SQLite and ignored log directories.</p>
+        </section>
+        <section class="section"><h2>Evidence Categories</h2><div id="evidence-categories" class="table-wrap"></div></section>
+        <section class="section"><h2>Primary Evidence Map</h2><div id="primary-evidence" class="table-wrap"></div></section>
+      </section>
+
+      <section class="tab-panel" id="panel-glossary">
+        <section class="section">
+          <div class="definition-list">
+            <article class="definition"><h3>Avahi / mDNS</h3><p>Local discovery for printers, casting, and <code>.local</code> names. Stop it only when you do not need local discovery.</p></article>
+            <article class="definition"><h3>MTU 1500</h3><p>Standard Ethernet packet size. Lower it only when path MTU tests show fragmentation or blackhole problems.</p></article>
+            <article class="definition"><h3>BSSID Pin</h3><p>A BSSID is one physical access point radio. Pinning can help a fixed desk, but should be re-tested when you move.</p></article>
+            <article class="definition"><h3>DNS Choice</h3><p>DNS affects lookup time, not raw bandwidth. It can help clients start connections faster.</p></article>
+            <article class="definition"><h3>Network Manager</h3><p>NetworkManager is the default laptop Wi-Fi manager. The iwd backend is worth testing only with rollback ready.</p></article>
+          </div>
+        </section>
+        <section class="section"><h2>Potential Next Improvements</h2><div id="next-steps" class="table-wrap"></div></section>
+      </section>
+    </div>
+  </section>
+
+  <footer>
+    Static viewer. Local SQLite file: <code>data/report.sqlite</code>.
+  </footer>
+</main>
+
+<script>
+  window.SPEEDTEST_REPORT_CONFIG = {
+    dbUrl: "data/report.sqlite",
+    sqlJsVersion: "1.13.0"
+  };
+</script>
+<script src="assets/report.js"></script>
+</body>
+</html>

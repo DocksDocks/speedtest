@@ -4,16 +4,20 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/sqlite.sh
 . "$SCRIPT_DIR/lib/sqlite.sh"
+# shellcheck source=lib/networkmanager.sh
+. "$SCRIPT_DIR/lib/networkmanager.sh"
 
 RUN_DIR="${1:-$(speedtest_default_run_dir)}"
 DB_PATH="${2:-$(speedtest_default_db)}"
 PHASE="${PHASE:-wifi-experiments}"
 IFACE="${IFACE:-$(speedtest_default_wifi_iface)}"
 CONNECTION_NAME="${CONNECTION_NAME:-$(speedtest_default_connection_name)}"
+CONNECTION_UUID="${CONNECTION_UUID:-}"
 PREFERRED_BSSID="${PREFERRED_BSSID:-}"
 STABILITY_SECONDS="${STABILITY_SECONDS:-300}"
 AB_SECONDS="${AB_SECONDS:-60}"
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-5}"
+RESTORE_CONNECTION_UP="${RESTORE_CONNECTION_UP:-1}"
 IW_BIN="${IW_BIN:-}"
 
 if [ -z "$IW_BIN" ] && command -v iw >/dev/null 2>&1; then
@@ -25,7 +29,14 @@ if [ -z "$IW_BIN" ] || [ ! -x "$IW_BIN" ]; then
   exit 1
 fi
 
-if [ -z "$IFACE" ] || [ -z "$CONNECTION_NAME" ]; then
+if [ -z "$CONNECTION_UUID" ] && [ -n "$CONNECTION_NAME" ]; then
+  CONNECTION_UUID="$(nm_connection_uuid_for_name "$CONNECTION_NAME")"
+fi
+if [ -z "$CONNECTION_NAME" ] && [ -n "$CONNECTION_UUID" ]; then
+  CONNECTION_NAME="$(nm_connection_name_for_uuid "$CONNECTION_UUID")"
+fi
+
+if [ -z "$IFACE" ] || { [ -z "$CONNECTION_UUID" ] && [ -z "$CONNECTION_NAME" ]; }; then
   printf '%s\n' "No active Wi-Fi connection detected. Set IFACE and CONNECTION_NAME explicitly." >&2
   exit 1
 fi
@@ -94,8 +105,10 @@ restore_bssid() {
     printf '%s\n' "[$(date)] Restoring original BSSID setting: ${ORIGINAL_BSSID:-<empty>}"
   } >> "$LOG_FILE"
 
-  nmcli connection modify "$CONNECTION_NAME" 802-11-wireless.bssid "$ORIGINAL_BSSID" >> "$LOG_FILE" 2>&1
-  nmcli connection up "$CONNECTION_NAME" >> "$LOG_FILE" 2>&1
+  nm_connection_modify "$CONNECTION_UUID" "$CONNECTION_NAME" 802-11-wireless.bssid "$ORIGINAL_BSSID" >> "$LOG_FILE" 2>&1
+  if [ "$RESTORE_CONNECTION_UP" = "1" ]; then
+    nm_connection_up "$CONNECTION_UUID" "$CONNECTION_NAME" "$IFACE" "" >> "$LOG_FILE" 2>&1
+  fi
 }
 
 trap restore_bssid EXIT INT TERM
@@ -320,9 +333,9 @@ set_bssid() {
   local bssid="$2"
 
   printf '%s\n' "[$(date)] Setting BSSID mode $label to ${bssid:-<auto>}" | tee -a "$LOG_FILE"
-  nmcli connection modify "$CONNECTION_NAME" 802-11-wireless.bssid "$bssid" >> "$LOG_FILE" 2>&1
+  nm_connection_modify "$CONNECTION_UUID" "$CONNECTION_NAME" 802-11-wireless.bssid "$bssid" >> "$LOG_FILE" 2>&1
   nmcli device wifi rescan ifname "$IFACE" >> "$LOG_FILE" 2>&1 || true
-  nmcli connection up "$CONNECTION_NAME" >> "$LOG_FILE" 2>&1
+  nm_connection_up "$CONNECTION_UUID" "$CONNECTION_NAME" "$IFACE" "$bssid" >> "$LOG_FILE" 2>&1
   sleep 20
 }
 
@@ -331,6 +344,7 @@ set_bssid() {
   printf '%s\n' "Run: $RUN_ID"
   printf '%s\n' "Interface: $IFACE"
   printf '%s\n' "Connection: $CONNECTION_NAME"
+  printf '%s\n' "Connection UUID: ${CONNECTION_UUID:-<name-only>}"
   printf '%s\n' "Preferred BSSID: $PREFERRED_BSSID"
   printf '%s\n' "Stability seconds: $STABILITY_SECONDS"
   printf '%s\n' "A/B seconds per mode: $AB_SECONDS"
@@ -338,7 +352,7 @@ set_bssid() {
   printf '%s\n' ""
 } > "$LOG_FILE"
 
-ORIGINAL_BSSID="$(nmcli -g 802-11-wireless.bssid connection show "$CONNECTION_NAME" 2>/dev/null | head -n 1)"
+ORIGINAL_BSSID="$(nm_connection_field_value "$CONNECTION_UUID" "$CONNECTION_NAME" 802-11-wireless.bssid | nm_unescape_colons)"
 if [ -z "$PREFERRED_BSSID" ]; then
   PREFERRED_BSSID="$ORIGINAL_BSSID"
 fi

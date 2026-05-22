@@ -78,6 +78,9 @@ speedtest_init_schema() {
   done
 
   sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "base_run_id" "base_run_id TEXT REFERENCES runs(run_id) ON DELETE SET NULL"
+  sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "connection_uuid" "connection_uuid TEXT"
+  sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "test_connection_name" "test_connection_name TEXT"
+  sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "test_connection_uuid" "test_connection_uuid TEXT"
 
   sqlite_exec "$db_path" "PRAGMA foreign_key_check; PRAGMA optimize;" >/dev/null
 }

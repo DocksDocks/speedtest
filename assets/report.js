@@ -529,9 +529,21 @@
     }
 
     const hasBaseRun = columnExists(db, "wifi_backend_tests", "base_run_id");
+    const hasConnectionUuid = columnExists(db, "wifi_backend_tests", "connection_uuid");
+    const hasTestConnectionName = columnExists(db, "wifi_backend_tests", "test_connection_name");
+    const hasTestConnectionUuid = columnExists(db, "wifi_backend_tests", "test_connection_uuid");
     const whereClause = hasBaseRun
       ? "(run_id = $run_id OR base_run_id = $run_id)"
       : "run_id = $run_id";
+    const connectionUuidExpr = hasConnectionUuid
+      ? "COALESCE(connection_uuid, 'n/a')"
+      : "'n/a'";
+    const testConnectionNameExpr = hasTestConnectionName
+      ? "COALESCE(test_connection_name, 'n/a')"
+      : "'n/a'";
+    const testConnectionUuidExpr = hasTestConnectionUuid
+      ? "COALESCE(test_connection_uuid, 'n/a')"
+      : "'n/a'";
 
     return rows(
       db,
@@ -542,6 +554,9 @@
         phase AS Phase,
         status AS Status,
         connection_name AS Connection,
+        ${connectionUuidExpr} AS "Connection UUID",
+        ${testConnectionNameExpr} AS "Test profile",
+        ${testConnectionUuidExpr} AS "Test UUID",
         interface_name AS Interface,
         COALESCE(original_bssid, 'n/a') AS "Original BSSID",
         COALESCE(preferred_bssid, 'n/a') AS "Preferred BSSID",

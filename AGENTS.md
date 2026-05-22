@@ -4,7 +4,7 @@
 
 - Purpose: local network diagnostics, raw-log ingestion, SQLite metric storage, and static browser reporting.
 - Shell entry points: `scripts/*.sh`.
-- Shared shell libraries: `scripts/lib/path.sh`, `scripts/lib/sqlite.sh`, `scripts/lib/classification.sh`, `scripts/lib/report.sh`.
+- Shared shell libraries: `scripts/lib/path.sh`, `scripts/lib/sqlite.sh`, `scripts/lib/classification.sh`, `scripts/lib/report.sh`, `scripts/lib/networkmanager.sh`.
 - SQLite schema: `db/schema/*.sql`; seed/default data: `db/defaults/*.sql`, `db/seed.sql`.
 - Browser report: `index.html`, `assets/report.css`, `assets/report.js`.
 - Project-local skills: `.agents/skills/sqlite3-quality/SKILL.md`, `.agents/skills/bash-diagnostics/SKILL.md`.

@@ -122,7 +122,10 @@ Both scripts require a typed confirmation before changing settings.
 
 ## iwd Backend Test
 
-The iwd test temporarily switches NetworkManager's Wi-Fi backend, runs the same stability/BSSID sample, and rolls back automatically. It requires root and a preferred BSSID.
+The iwd test temporarily switches NetworkManager's Wi-Fi backend, runs the same
+stability/BSSID sample, and rolls back automatically. It requires root and a
+preferred BSSID, and the Wi-Fi link will briefly drop while NetworkManager
+restarts.
 
 ```bash
 sudo apt install -y iwd
@@ -134,6 +137,13 @@ By default the script creates a unique attempt folder named
 Set `IWD_UNIQUE_RUN=0` only when you intentionally want to reuse the exact run
 directory. The script writes `iwd-rollback.sh` inside the attempt folder before
 changing NetworkManager.
+
+The script clones the active authenticated NetworkManager profile first and runs
+the iwd experiment against that cloned profile UUID. The original profile is
+used for rollback, and the clone is deleted only after the original profile
+comes back up successfully. If rollback cannot activate the original profile,
+the cloned profile is left in NetworkManager as a recovery option and the script
+exits non-zero instead of reporting success.
 
 ## Privacy
 

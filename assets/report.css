@@ -111,6 +111,46 @@ table {
   color: var(--ink);
 }
 
+.db-loader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 22px;
+}
+
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 18px rgba(24, 32, 29, 0.08);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.file-button:active {
+  transform: scale(0.97);
+}
+
+.file-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#file-load-status {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .section {
   margin-top: 26px;
 }

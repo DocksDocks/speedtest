@@ -11,7 +11,7 @@
   <header>
     <div>
       <h1>Network Speed Report</h1>
-      <p class="subtitle">A focused before-to-current view of local network tuning. Publish a local SQLite snapshot to <code>data/report.sqlite</code>, then serve this directory to populate the viewer.</p>
+      <p class="subtitle">A focused before-to-current view of local network tuning backed by a local SQLite snapshot.</p>
     </div>
     <aside class="run-meta" id="run-meta">
       <span><strong>Run</strong> <span>no data</span></span>
@@ -19,6 +19,12 @@
       <span><strong>Status</strong> <span>waiting for export</span></span>
     </aside>
   </header>
+
+  <section class="db-loader" aria-label="SQLite data source">
+    <label class="file-button" for="sqlite-file">Load file</label>
+    <input class="file-input" id="sqlite-file" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3,application/x-sqlite3">
+    <span id="file-load-status">Automatic source: <code>data/report.sqlite</code></span>
+  </section>
 
   <section class="tabs">
     <input class="tab-input" type="radio" name="tabs" id="tab-summary" checked>
@@ -86,7 +92,9 @@
 <script>
   window.SPEEDTEST_REPORT_CONFIG = {
     dbUrl: "data/report.sqlite",
-    sqlJsVersion: "1.13.0"
+    sqlJsVersion: "1.13.0",
+    fileInputId: "sqlite-file",
+    loadStatusId: "file-load-status"
   };
 </script>
 <script src="assets/report.js"></script>

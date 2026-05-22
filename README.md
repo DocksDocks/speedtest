@@ -37,6 +37,10 @@ scripts/serve-report.sh
 
 Open `http://127.0.0.1:8765/`. To force a specific run, open `http://127.0.0.1:8765/?run=<run_id>`.
 
+You can also open `index.html` directly from the filesystem and use the
+`Load file` button to choose `data/report.sqlite`. Browsers do not allow a page
+to auto-select a local file by path, so direct-open mode needs that click.
+
 ## Database Layout
 
 - `db/schema/001_core.sql`: migrations, preferences, and run identity.

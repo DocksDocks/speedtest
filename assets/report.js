@@ -7,6 +7,8 @@
     sqlJsBaseUrl: "",
     sqlJsScriptUrl: "",
     runId: "",
+    fileInputId: "sqlite-file",
+    loadStatusId: "file-load-status",
   };
 
   const config = Object.assign({}, defaults, window.SPEEDTEST_REPORT_CONFIG || {});
@@ -29,6 +31,8 @@
     primaryEvidence: "primary-evidence",
     nextSteps: "next-steps",
   };
+
+  let sqlJsPromise;
 
   function byId(id) {
     return document.getElementById(id);
@@ -75,13 +79,19 @@
   }
 
   async function loadSqlJs() {
-    if (!window.initSqlJs) {
-      await loadScript(config.sqlJsScriptUrl);
+    if (!sqlJsPromise) {
+      sqlJsPromise = (async () => {
+        if (!window.initSqlJs) {
+          await loadScript(config.sqlJsScriptUrl);
+        }
+
+        return window.initSqlJs({
+          locateFile: (file) => `${config.sqlJsBaseUrl}${file}`,
+        });
+      })();
     }
 
-    return window.initSqlJs({
-      locateFile: (file) => `${config.sqlJsBaseUrl}${file}`,
-    });
+    return sqlJsPromise;
   }
 
   async function openDatabase(SQL) {
@@ -90,10 +100,61 @@
       throw new Error(`Could not load ${config.dbUrl}: HTTP ${response.status}`);
     }
 
-    const buffer = await response.arrayBuffer();
+    return openDatabaseFromBuffer(SQL, await response.arrayBuffer());
+  }
+
+  function openDatabaseFromBuffer(SQL, buffer) {
     const db = new SQL.Database(new Uint8Array(buffer));
     db.run("PRAGMA query_only = ON;");
     return db;
+  }
+
+  function readFileAsArrayBuffer(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function setLoadStatus(message) {
+    const target = byId(config.loadStatusId);
+    if (target) {
+      target.textContent = message;
+    }
+  }
+
+  async function loadSelectedFile(file) {
+    setLoadStatus(`Loading ${file.name}`);
+    const SQL = await loadSqlJs();
+    const db = openDatabaseFromBuffer(SQL, await readFileAsArrayBuffer(file));
+
+    try {
+      render(buildReport(db));
+      setLoadStatus(`Loaded ${file.name}`);
+    } finally {
+      db.close();
+    }
+  }
+
+  function setupFileLoader() {
+    const input = byId(config.fileInputId);
+    if (!input) {
+      return;
+    }
+
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (!file) {
+        return;
+      }
+
+      loadSelectedFile(file).catch((error) => {
+        setLoadStatus(`Could not load ${file.name}`);
+        renderError(error);
+      });
+    });
   }
 
   function rows(db, sql, params) {
@@ -760,7 +821,7 @@
     renderMeta({ id: "no data", comparison: "before -> current", status: "publish needed" });
     renderCards([]);
     byId("change-summary").textContent =
-      `No SQLite report database loaded. Run scripts/publish-report-db.sh, then scripts/serve-report.sh and open the local URL. Detail: ${error.message}`;
+      `No SQLite report database loaded. Serve the repo locally or open a SQLite snapshot with the file picker. Detail: ${error.message}`;
     byId("evidence-summary").textContent =
       "The committed viewer reads an ignored local SQLite file from data/report.sqlite.";
 
@@ -770,11 +831,14 @@
   }
 
   async function main() {
+    setupFileLoader();
+
     const SQL = await loadSqlJs();
     const db = await openDatabase(SQL);
 
     try {
       render(buildReport(db));
+      setLoadStatus(`Loaded ${config.dbUrl}`);
     } finally {
       db.close();
     }

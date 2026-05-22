@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/sqlite.sh
 . "$SCRIPT_DIR/lib/sqlite.sh"
 
-RUN_DIR="${1:-$(speedtest_default_run_dir)}"
+REQUESTED_RUN_DIR="${1:-$(speedtest_default_run_dir)}"
 DB_PATH="${2:-$(speedtest_default_db)}"
 CONNECTION_NAME="${CONNECTION_NAME:-$(speedtest_default_connection_name)}"
 IFACE="${IFACE:-$(speedtest_default_wifi_iface)}"
@@ -15,6 +15,22 @@ STABILITY_SECONDS="${STABILITY_SECONDS:-300}"
 AB_SECONDS="${AB_SECONDS:-60}"
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-5}"
 IWD_CONF="/etc/NetworkManager/conf.d/90-speedtest-iwd.conf"
+BASE_RUN_DIR="${BASE_RUN_DIR:-$REQUESTED_RUN_DIR}"
+BASE_RUN_ID="${BASE_RUN_ID:-$(basename "$BASE_RUN_DIR")}"
+IWD_UNIQUE_RUN="${IWD_UNIQUE_RUN:-1}"
+
+if [ "$IWD_UNIQUE_RUN" = "1" ]; then
+  RUN_ID="${IWD_RUN_ID:-${BASE_RUN_ID}-iwd-$(date +%Y%m%d-%H%M%S)}"
+  RUN_DIR="$(dirname "$BASE_RUN_DIR")/$RUN_ID"
+else
+  RUN_DIR="$BASE_RUN_DIR"
+  RUN_ID="$(basename "$RUN_DIR")"
+fi
+
+BASE_RUN_ID_FOR_SQL="$BASE_RUN_ID"
+if [ "$BASE_RUN_ID_FOR_SQL" = "$RUN_ID" ]; then
+  BASE_RUN_ID_FOR_SQL=""
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   printf '%s\n' "Run with sudo. This test changes NetworkManager's Wi-Fi backend temporarily." >&2
@@ -34,7 +50,6 @@ fi
 
 mkdir -p "$RUN_DIR"
 
-RUN_ID="$(basename "$RUN_DIR")"
 BACKUP_DIR="$RUN_DIR/iwd-backup-$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="$RUN_DIR/iwd-backend-test.log"
 ROLLBACK_SCRIPT="$RUN_DIR/iwd-rollback.sh"
@@ -106,6 +121,7 @@ record_backend_test() {
   sqlite_exec "$DB_PATH" "
   INSERT INTO wifi_backend_tests (
     run_id,
+    base_run_id,
     phase,
     backend,
     connection_name,
@@ -119,6 +135,7 @@ record_backend_test() {
     notes
   ) VALUES (
     '$(sql_quote "$RUN_ID")',
+    NULLIF('$(sql_quote "$BASE_RUN_ID_FOR_SQL")', ''),
     'wifi-iwd-experiments',
     'iwd',
     '$(sql_quote "$CONNECTION_NAME")',
@@ -133,6 +150,7 @@ record_backend_test() {
   )
   ON CONFLICT(run_id, phase, backend) DO UPDATE SET
     connection_name = excluded.connection_name,
+    base_run_id = excluded.base_run_id,
     interface_name = excluded.interface_name,
     original_bssid = excluded.original_bssid,
     preferred_bssid = excluded.preferred_bssid,
@@ -178,9 +196,23 @@ VALUES (
 );
 "
 
+if [ -n "$BASE_RUN_ID_FOR_SQL" ]; then
+  sqlite_exec "$DB_PATH" "
+  INSERT OR IGNORE INTO runs (run_id, started_at, run_dir, notes)
+  VALUES (
+    '$(sql_quote "$BASE_RUN_ID_FOR_SQL")',
+    '$(date -Is 2>/dev/null || date)',
+    '$(sql_quote "$BASE_RUN_DIR")',
+    'base run linked to iwd backend test'
+  );
+  "
+fi
+
 {
   printf '%s\n' "Started: $(date)"
   printf '%s\n' "Run: $RUN_ID"
+  printf '%s\n' "Base run: ${BASE_RUN_ID_FOR_SQL:-<same>}"
+  printf '%s\n' "Run dir: $RUN_DIR"
   printf '%s\n' "Connection: $CONNECTION_NAME"
   printf '%s\n' "Interface: $IFACE"
   printf '%s\n' "Preferred BSSID: $PREFERRED_BSSID"

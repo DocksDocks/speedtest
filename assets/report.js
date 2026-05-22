@@ -195,6 +195,18 @@
     )) > 0;
   }
 
+  function columnExists(db, tableName, columnName) {
+    if (!/^[A-Za-z0-9_]+$/.test(tableName)) {
+      return false;
+    }
+
+    return Number(scalar(
+      db,
+      `SELECT COUNT(*) FROM pragma_table_info('${tableName}') WHERE name = $name;`,
+      { $name: columnName },
+    )) > 0;
+  }
+
   function latestRunId(db) {
     const explicit = selectedRunId();
     if (explicit) {
@@ -203,7 +215,27 @@
 
     return scalar(
       db,
-      "SELECT run_id FROM runs ORDER BY started_at DESC, run_id DESC LIMIT 1;",
+      `
+      SELECT COALESCE(
+        (
+          SELECT r.run_id
+          FROM runs r
+          WHERE EXISTS (
+            SELECT 1
+            FROM speed_tests st
+            WHERE st.run_id = r.run_id
+          )
+          ORDER BY r.started_at DESC, r.run_id DESC
+          LIMIT 1
+        ),
+        (
+          SELECT run_id
+          FROM runs
+          ORDER BY started_at DESC, run_id DESC
+          LIMIT 1
+        )
+      ) AS run_id;
+      `,
     );
   }
 
@@ -496,10 +528,16 @@
       return [];
     }
 
+    const hasBaseRun = columnExists(db, "wifi_backend_tests", "base_run_id");
+    const whereClause = hasBaseRun
+      ? "(run_id = $run_id OR base_run_id = $run_id)"
+      : "run_id = $run_id";
+
     return rows(
       db,
       `
       SELECT
+        run_id AS "Attempt run",
         backend AS Backend,
         phase AS Phase,
         status AS Status,
@@ -511,7 +549,7 @@
         COALESCE(finished_at, 'n/a') AS Finished,
         notes AS Notes
       FROM wifi_backend_tests
-      WHERE run_id = $run_id
+      WHERE ${whereClause}
       ORDER BY started_at DESC, backend;
       `,
       { $run_id: runId },
@@ -519,6 +557,22 @@
   }
 
   function wifiStabilityRows(db, runId) {
+    const iwdRunId = tableExists(db, "wifi_backend_tests") &&
+      columnExists(db, "wifi_backend_tests", "base_run_id")
+      ? scalar(
+        db,
+        `
+        SELECT run_id
+        FROM wifi_backend_tests
+        WHERE run_id = $run_id
+           OR base_run_id = $run_id
+        ORDER BY started_at DESC, run_id DESC
+        LIMIT 1;
+        `,
+        { $run_id: runId },
+      ) || runId
+      : runId;
+
     return rows(
       db,
       `
@@ -532,6 +586,7 @@
           ('wifi-iwd-experiments', 'bssid-pinned', 'NetworkManager/iwd', 'BSSID pin on', 60)
       )
       SELECT
+        CASE WHEN g.phase = 'wifi-iwd-experiments' THEN $iwd_run_id ELSE $run_id END AS Run,
         g.backend AS Backend,
         g.label AS Test,
         COUNT(s.id) AS Samples,
@@ -546,13 +601,16 @@
         CASE WHEN COUNT(s.id) > 0 THEN printf('%d', COALESCE(MAX(s.beacon_loss) - MIN(s.beacon_loss), 0)) ELSE 'n/a' END AS "Beacon loss delta"
       FROM groups g
       LEFT JOIN wifi_stability_samples s
-        ON s.run_id = $run_id
+        ON s.run_id = CASE
+          WHEN g.phase = 'wifi-iwd-experiments' THEN $iwd_run_id
+          ELSE $run_id
+        END
        AND s.phase = g.phase
        AND s.sample_group = g.sample_group
       GROUP BY g.phase, g.sample_group, g.backend, g.label, g.sort_order
       ORDER BY g.sort_order;
       `,
-      { $run_id: runId },
+      { $run_id: runId, $iwd_run_id: iwdRunId },
     );
   }
 

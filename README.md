@@ -129,7 +129,11 @@ sudo apt install -y iwd
 sudo CONFIRM_IWD_TEST=YES PREFERRED_BSSID=<ap-bssid> scripts/test-iwd-backend.sh "logs/$RUN_ID"
 ```
 
-The script writes `logs/<run_id>/iwd-rollback.sh` before changing NetworkManager.
+By default the script creates a unique attempt folder named
+`logs/<run_id>-iwd-<timestamp>/` and links it back to the base run in SQLite.
+Set `IWD_UNIQUE_RUN=0` only when you intentionally want to reuse the exact run
+directory. The script writes `iwd-rollback.sh` inside the attempt folder before
+changing NetworkManager.
 
 ## Privacy
 

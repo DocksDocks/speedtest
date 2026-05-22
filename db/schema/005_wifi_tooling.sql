@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS wifi_stability_samples (
 CREATE TABLE IF NOT EXISTS wifi_backend_tests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+  base_run_id TEXT REFERENCES runs(run_id) ON DELETE SET NULL,
   phase TEXT NOT NULL,
   backend TEXT NOT NULL,
   connection_name TEXT,

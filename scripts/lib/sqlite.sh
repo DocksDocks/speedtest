@@ -41,6 +41,19 @@ sqlite_table_html() {
     "$db_path" "$sql"
 }
 
+sqlite_add_column_if_missing() {
+  local db_path="$1"
+  local table_name="$2"
+  local column_name="$3"
+  local column_definition="$4"
+  local exists
+
+  exists="$(sqlite_scalar "$db_path" "SELECT COUNT(*) FROM pragma_table_info('$(sql_quote "$table_name")') WHERE name = '$(sql_quote "$column_name")';")"
+  if [ "$exists" = "0" ]; then
+    sqlite_exec "$db_path" "ALTER TABLE $table_name ADD COLUMN $column_definition;" >/dev/null
+  fi
+}
+
 speedtest_init_schema() {
   local db_path="${1:-$(speedtest_default_db)}"
   local root
@@ -63,6 +76,8 @@ speedtest_init_schema() {
       -cmd ".timeout 5000" \
       "$db_path" < "$sql_file" >/dev/null
   done
+
+  sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "base_run_id" "base_run_id TEXT REFERENCES runs(run_id) ON DELETE SET NULL"
 
   sqlite_exec "$db_path" "PRAGMA foreign_key_check; PRAGMA optimize;" >/dev/null
 }

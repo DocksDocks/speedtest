@@ -123,16 +123,29 @@ Both scripts require a typed confirmation before changing settings.
 ## iwd Backend Test
 
 The iwd test temporarily switches NetworkManager's Wi-Fi backend, runs the same
-stability/BSSID sample, and rolls back automatically. It requires root and a
-preferred BSSID, and the Wi-Fi link will briefly drop while NetworkManager
-restarts.
+stability/BSSID sample, and rolls back automatically. It requires root, and the
+Wi-Fi link will briefly drop while NetworkManager restarts.
 
 ```bash
 sudo apt install -y iwd
-sudo CONFIRM_IWD_TEST=YES PREFERRED_BSSID=<ap-bssid> scripts/test-iwd-backend.sh "logs/$RUN_ID"
+sudo scripts/test-iwd-backend.sh
 ```
 
-By default the script creates a unique attempt folder named
+With a TTY, the script lets you select the test length and preferred BSSID, then
+requires typing `YES` before it restarts NetworkManager. For a short
+non-interactive smoke test that auto-detects the active profile, interface, and
+current BSSID:
+
+```bash
+sudo scripts/test-iwd-backend.sh --yes
+```
+
+By default the script uses the quick profile: 60 seconds current stability, 30
+seconds BSSID auto, 30 seconds BSSID pinned, and 5-second samples. Use
+`--standard` for the older 300/60/5 timing, or override individual values with
+`--stability-seconds`, `--ab-seconds`, and `--sample-interval`.
+
+Each run creates a unique attempt folder named
 `logs/<run_id>-iwd-<timestamp>/` and links it back to the base run in SQLite.
 Set `IWD_UNIQUE_RUN=0` only when you intentionally want to reuse the exact run
 directory. The script writes `iwd-rollback.sh` inside the attempt folder before

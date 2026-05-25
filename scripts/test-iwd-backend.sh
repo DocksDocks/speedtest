@@ -7,16 +7,173 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/networkmanager.sh
 . "$SCRIPT_DIR/lib/networkmanager.sh"
 
-REQUESTED_RUN_DIR="${1:-$(speedtest_default_run_dir)}"
-DB_PATH="${2:-$(speedtest_default_db)}"
-SOURCE_CONNECTION_UUID="${CONNECTION_UUID:-$(nm_active_wifi_connection_uuid)}"
+usage() {
+  cat <<'EOF'
+Usage:
+  sudo scripts/test-iwd-backend.sh [options] [run_dir] [db_path]
+
+Default behavior:
+  - quick smoke test: 60s current stability, 30s per BSSID mode, 5s samples
+  - active Wi-Fi profile and interface are auto-detected
+  - preferred BSSID defaults to the currently connected AP
+  - interactive TTY runs show selection prompts and require typing YES
+
+Options:
+  -y, --yes                 skip prompts; still requires sudo
+      --quick               60s current, 30s per BSSID mode (default)
+      --standard            300s current, 60s per BSSID mode
+      --thorough            600s current, 120s per BSSID mode
+      --stability-seconds N override current stability duration
+      --ab-seconds N        override each BSSID A/B duration
+      --sample-interval N   override sample interval
+      --bssid BSSID         preferred AP BSSID to pin
+      --connection-uuid ID  source NetworkManager profile UUID
+      --connection-name NAME source NetworkManager profile name
+      --iface IFACE         Wi-Fi interface
+      --run-dir DIR         base run directory
+      --db PATH             SQLite database path
+      --non-interactive     fail instead of prompting unless --yes is used
+  -h, --help                show this help
+EOF
+}
+
+die_usage() {
+  printf '%s\n' "$1" >&2
+  printf '%s\n' "" >&2
+  usage >&2
+  exit 2
+}
+
+require_option_value() {
+  local option_name="$1"
+  local option_value="${2:-}"
+  if [ -z "$option_value" ]; then
+    die_usage "Missing value for $option_name."
+  fi
+}
+
+REQUESTED_RUN_DIR=""
+DB_PATH=""
+SOURCE_CONNECTION_UUID="${CONNECTION_UUID:-}"
 SOURCE_CONNECTION_NAME="${CONNECTION_NAME:-}"
-IFACE="${IFACE:-$(speedtest_default_wifi_iface)}"
+IFACE="${IFACE:-}"
 PREFERRED_BSSID="${PREFERRED_BSSID:-}"
-SQLITE_BIN="${SQLITE_BIN:-$(speedtest_sqlite_bin)}"
-STABILITY_SECONDS="${STABILITY_SECONDS:-300}"
-AB_SECONDS="${AB_SECONDS:-60}"
-SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-5}"
+SQLITE_BIN="${SQLITE_BIN:-}"
+STABILITY_SECONDS="${STABILITY_SECONDS:-}"
+AB_SECONDS="${AB_SECONDS:-}"
+SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-}"
+IWD_MODE_EXPLICIT=0
+if [ -n "${IWD_TEST_MODE:-}" ]; then
+  IWD_MODE_EXPLICIT=1
+fi
+IWD_TEST_MODE="${IWD_TEST_MODE:-quick}"
+IWD_NON_INTERACTIVE="${IWD_NON_INTERACTIVE:-0}"
+IWD_ASSUME_YES=0
+
+POSITIONAL_ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -y|--yes)
+      CONFIRM_IWD_TEST=YES
+      IWD_ASSUME_YES=1
+      ;;
+    --quick|--smoke)
+      IWD_TEST_MODE="quick"
+      IWD_MODE_EXPLICIT=1
+      ;;
+    --standard)
+      IWD_TEST_MODE="standard"
+      IWD_MODE_EXPLICIT=1
+      ;;
+    --thorough)
+      IWD_TEST_MODE="thorough"
+      IWD_MODE_EXPLICIT=1
+      ;;
+    --stability-seconds)
+      shift
+      require_option_value "--stability-seconds" "${1:-}"
+      STABILITY_SECONDS="$1"
+      IWD_TEST_MODE="custom"
+      IWD_MODE_EXPLICIT=1
+      ;;
+    --ab-seconds)
+      shift
+      require_option_value "--ab-seconds" "${1:-}"
+      AB_SECONDS="$1"
+      IWD_TEST_MODE="custom"
+      IWD_MODE_EXPLICIT=1
+      ;;
+    --sample-interval)
+      shift
+      require_option_value "--sample-interval" "${1:-}"
+      SAMPLE_INTERVAL="$1"
+      IWD_TEST_MODE="custom"
+      IWD_MODE_EXPLICIT=1
+      ;;
+    --bssid)
+      shift
+      require_option_value "--bssid" "${1:-}"
+      PREFERRED_BSSID="$1"
+      ;;
+    --connection-uuid)
+      shift
+      require_option_value "--connection-uuid" "${1:-}"
+      SOURCE_CONNECTION_UUID="$1"
+      ;;
+    --connection-name)
+      shift
+      require_option_value "--connection-name" "${1:-}"
+      SOURCE_CONNECTION_NAME="$1"
+      ;;
+    --iface)
+      shift
+      require_option_value "--iface" "${1:-}"
+      IFACE="$1"
+      ;;
+    --run-dir)
+      shift
+      require_option_value "--run-dir" "${1:-}"
+      REQUESTED_RUN_DIR="$1"
+      ;;
+    --db)
+      shift
+      require_option_value "--db" "${1:-}"
+      DB_PATH="$1"
+      ;;
+    --non-interactive)
+      IWD_NON_INTERACTIVE=1
+      ;;
+    --interactive)
+      IWD_NON_INTERACTIVE=0
+      ;;
+    --)
+      shift
+      while [ "$#" -gt 0 ]; do
+        POSITIONAL_ARGS+=("$1")
+        shift
+      done
+      break
+      ;;
+    -*)
+      die_usage "Unknown option: $1"
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      ;;
+  esac
+  shift
+done
+
+if [ "${#POSITIONAL_ARGS[@]}" -gt 2 ]; then
+  die_usage "Too many positional arguments."
+fi
+
+REQUESTED_RUN_DIR="${REQUESTED_RUN_DIR:-${POSITIONAL_ARGS[0]:-$(speedtest_default_run_dir)}}"
+DB_PATH="${DB_PATH:-${POSITIONAL_ARGS[1]:-$(speedtest_default_db)}}"
 IWD_CONF="/etc/NetworkManager/conf.d/90-speedtest-iwd.conf"
 BASE_RUN_DIR="${BASE_RUN_DIR:-$REQUESTED_RUN_DIR}"
 BASE_RUN_ID="${BASE_RUN_ID:-$(basename "$BASE_RUN_DIR")}"
@@ -40,11 +197,9 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-if [ "${CONFIRM_IWD_TEST:-}" != "YES" ]; then
-  printf '%s\n' "Refusing to run without CONFIRM_IWD_TEST=YES." >&2
-  printf '%s\n' "Example: sudo CONFIRM_IWD_TEST=YES $0 $RUN_DIR $DB_PATH" >&2
-  exit 1
-fi
+SOURCE_CONNECTION_UUID="${SOURCE_CONNECTION_UUID:-$(nm_active_wifi_connection_uuid)}"
+IFACE="${IFACE:-$(speedtest_default_wifi_iface)}"
+SQLITE_BIN="${SQLITE_BIN:-$(speedtest_sqlite_bin)}"
 
 if [ -z "$SOURCE_CONNECTION_NAME" ] && [ -z "$SOURCE_CONNECTION_UUID" ]; then
   SOURCE_CONNECTION_NAME="$(speedtest_default_connection_name)"
@@ -84,6 +239,215 @@ need_command() {
 
 shell_escape_single() {
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
+}
+
+is_interactive() {
+  [ "$IWD_ASSUME_YES" != "1" ] && [ "$IWD_NON_INTERACTIVE" != "1" ] && [ -t 0 ] && [ -t 1 ]
+}
+
+set_duration_defaults() {
+  local default_stability
+  local default_ab
+  local default_interval
+
+  case "$IWD_TEST_MODE" in
+    quick|smoke)
+      default_stability=60
+      default_ab=30
+      default_interval=5
+      ;;
+    standard)
+      default_stability=300
+      default_ab=60
+      default_interval=5
+      ;;
+    thorough)
+      default_stability=600
+      default_ab=120
+      default_interval=5
+      ;;
+    custom)
+      default_stability=60
+      default_ab=30
+      default_interval=5
+      ;;
+    *)
+      die_usage "Unknown test mode: $IWD_TEST_MODE"
+      ;;
+  esac
+
+  STABILITY_SECONDS="${STABILITY_SECONDS:-$default_stability}"
+  AB_SECONDS="${AB_SECONDS:-$default_ab}"
+  SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-$default_interval}"
+}
+
+validate_positive_int() {
+  local label="$1"
+  local value="$2"
+
+  case "$value" in
+    ''|*[!0-9]*)
+      die_usage "$label must be a positive integer."
+      ;;
+  esac
+  if [ "$value" -lt 1 ]; then
+    die_usage "$label must be greater than zero."
+  fi
+}
+
+prompt_test_mode() {
+  local answer
+
+  printf '%s\n' ""
+  printf '%s\n' "Select iwd test length:"
+  printf '%s\n' "  1) quick    60s current + 30s auto + 30s pinned (recommended first run)"
+  printf '%s\n' "  2) standard 300s current + 60s auto + 60s pinned"
+  printf '%s\n' "  3) thorough 600s current + 120s auto + 120s pinned"
+  printf '%s' "Choice [1]: "
+  read -r answer
+
+  case "${answer:-1}" in
+    1) IWD_TEST_MODE="quick" ;;
+    2) IWD_TEST_MODE="standard" ;;
+    3) IWD_TEST_MODE="thorough" ;;
+    *) die_usage "Invalid test length choice: $answer" ;;
+  esac
+}
+
+current_bssid_for_iface() {
+  local iface="$1"
+  iw dev "$iface" link 2>/dev/null |
+    awk '/Connected to/ { print toupper($3); exit }'
+}
+
+append_bssid_candidate() {
+  local candidate_bssid="$1"
+  local candidate_label="$2"
+  local existing
+
+  if [ -z "$candidate_bssid" ]; then
+    return
+  fi
+
+  for existing in "${BSSID_CANDIDATES[@]:-}"; do
+    if [ "$existing" = "$candidate_bssid" ]; then
+      return
+    fi
+  done
+
+  BSSID_CANDIDATES+=("$candidate_bssid")
+  BSSID_LABELS+=("$candidate_label")
+}
+
+load_bssid_candidates() {
+  local current_bssid="$1"
+  local line
+  local active
+  local bssid
+  local signal
+  local channel
+  local freq
+
+  BSSID_CANDIDATES=()
+  BSSID_LABELS=()
+  append_bssid_candidate "$current_bssid" "current connection"
+  append_bssid_candidate "$ORIGINAL_BSSID" "profile pin"
+
+  while IFS=$'\t' read -r active bssid signal channel freq; do
+    bssid="$(printf '%s' "$bssid" | tr '[:lower:]' '[:upper:]')"
+    if [ -z "$bssid" ]; then
+      continue
+    fi
+    line="scan signal=${signal:-n/a} channel=${channel:-n/a} freq=${freq:-n/a}"
+    if [ "$active" = "yes" ]; then
+      line="active $line"
+    fi
+    append_bssid_candidate "$bssid" "$line"
+  done < <(
+    nmcli -f ACTIVE,BSSID,SIGNAL,CHAN,FREQ device wifi list --rescan yes ifname "$IFACE" 2>/dev/null |
+      awk 'NR > 1 && $2 ~ /^[0-9A-Fa-f][0-9A-Fa-f]:/ { print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 }'
+  )
+}
+
+choose_preferred_bssid() {
+  local current_bssid
+  local answer
+  local index
+
+  if [ -n "$PREFERRED_BSSID" ]; then
+    return
+  fi
+
+  current_bssid="$(current_bssid_for_iface "$IFACE")"
+  current_bssid="$(printf '%s' "$current_bssid" | tr '[:lower:]' '[:upper:]')"
+
+  if ! is_interactive; then
+    PREFERRED_BSSID="${current_bssid:-$ORIGINAL_BSSID}"
+    return
+  fi
+
+  load_bssid_candidates "$current_bssid"
+
+  printf '%s\n' ""
+  printf '%s\n' "Select preferred BSSID for the pinned side of the iwd test:"
+  if [ "${#BSSID_CANDIDATES[@]}" -eq 0 ]; then
+    printf '%s\n' "  No BSSID candidates detected."
+  else
+    index=0
+    while [ "$index" -lt "${#BSSID_CANDIDATES[@]}" ]; do
+      printf '  %d) %s  (%s)\n' "$((index + 1))" "${BSSID_CANDIDATES[$index]}" "${BSSID_LABELS[$index]}"
+      index=$((index + 1))
+    done
+  fi
+  printf '%s\n' "  m) enter BSSID manually"
+  printf '%s' "Choice [1]: "
+  read -r answer
+
+  if [ -z "$answer" ]; then
+    answer=1
+  fi
+  if [ "$answer" = "m" ] || [ "$answer" = "M" ]; then
+    printf '%s' "BSSID: "
+    read -r PREFERRED_BSSID
+    return
+  fi
+  case "$answer" in
+    ''|*[!0-9]*)
+      die_usage "Invalid BSSID choice: $answer"
+      ;;
+  esac
+  if [ "$answer" -lt 1 ] || [ "$answer" -gt "${#BSSID_CANDIDATES[@]}" ]; then
+    die_usage "BSSID choice out of range: $answer"
+  fi
+  PREFERRED_BSSID="${BSSID_CANDIDATES[$((answer - 1))]}"
+}
+
+confirm_iwd_test() {
+  local answer
+
+  if [ "${CONFIRM_IWD_TEST:-}" = "YES" ]; then
+    return
+  fi
+  if ! is_interactive; then
+    printf '%s\n' "Refusing to run without confirmation." >&2
+    printf '%s\n' "Use --yes for non-interactive runs, or run from a TTY and type YES at the prompt." >&2
+    exit 1
+  fi
+
+  printf '%s\n' ""
+  printf '%s\n' "This will restart NetworkManager, briefly drop Wi-Fi, switch to iwd for the test, then roll back."
+  printf '%s\n' "Run: $RUN_ID"
+  printf '%s\n' "Source connection: $SOURCE_CONNECTION_NAME"
+  printf '%s\n' "Interface: $IFACE"
+  printf '%s\n' "Preferred BSSID: $PREFERRED_BSSID"
+  printf '%s\n' "Durations: current=${STABILITY_SECONDS}s auto=${AB_SECONDS}s pinned=${AB_SECONDS}s interval=${SAMPLE_INTERVAL}s"
+  printf '%s' "Type YES to continue: "
+  read -r answer
+  if [ "$answer" != "YES" ]; then
+    printf '%s\n' "Cancelled."
+    exit 1
+  fi
+  CONFIRM_IWD_TEST=YES
 }
 
 record_backend_test() {
@@ -294,6 +658,23 @@ need_command systemctl
 need_command NetworkManager
 need_command "$SQLITE_BIN"
 
+if is_interactive && [ "$IWD_MODE_EXPLICIT" -ne 1 ]; then
+  prompt_test_mode
+fi
+set_duration_defaults
+validate_positive_int "STABILITY_SECONDS" "$STABILITY_SECONDS"
+validate_positive_int "AB_SECONDS" "$AB_SECONDS"
+validate_positive_int "SAMPLE_INTERVAL" "$SAMPLE_INTERVAL"
+
+ORIGINAL_BSSID="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" 802-11-wireless.bssid | nm_unescape_colons)"
+ORIGINAL_AUTOCONNECT="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" connection.autoconnect)"
+choose_preferred_bssid
+if [ -z "$PREFERRED_BSSID" ]; then
+  printf '%s\n' "Could not auto-detect a BSSID. Use --bssid <ap-bssid>." >&2
+  exit 1
+fi
+confirm_iwd_test
+
 mkdir -p "$BACKUP_DIR"
 speedtest_init_schema "$DB_PATH"
 
@@ -337,16 +718,7 @@ fi
 } > "$LOG_FILE"
 
 NetworkManager --print-config > "$BACKUP_DIR/networkmanager-print-config-before.txt" 2>&1 || true
-nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" 802-11-wireless.bssid > "$BACKUP_DIR/original-bssid.txt" 2>&1 || true
-ORIGINAL_BSSID="$(head -n 1 "$BACKUP_DIR/original-bssid.txt" | nm_unescape_colons)"
-ORIGINAL_AUTOCONNECT="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" connection.autoconnect)"
-if [ -z "$PREFERRED_BSSID" ]; then
-  PREFERRED_BSSID="$ORIGINAL_BSSID"
-fi
-if [ -z "$PREFERRED_BSSID" ]; then
-  printf '%s\n' "Set PREFERRED_BSSID before running the iwd BSSID A/B test." >&2
-  exit 1
-fi
+printf '%s\n' "$ORIGINAL_BSSID" > "$BACKUP_DIR/original-bssid.txt"
 printf '%s\n' "Effective preferred BSSID: $PREFERRED_BSSID" >> "$LOG_FILE"
 printf '%s\n' "Original autoconnect: ${ORIGINAL_AUTOCONNECT:-<unknown>}" >> "$LOG_FILE"
 

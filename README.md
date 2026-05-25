@@ -128,7 +128,7 @@ Wi-Fi link will briefly drop while NetworkManager restarts.
 
 ```bash
 sudo apt install -y iwd
-sudo scripts/test-iwd-backend.sh
+./scripts/test-iwd-backend.sh
 ```
 
 With a TTY, the script lets you select the test length and preferred BSSID, then
@@ -137,7 +137,7 @@ non-interactive smoke test that auto-detects the active profile, interface, and
 current BSSID:
 
 ```bash
-sudo scripts/test-iwd-backend.sh --yes
+./scripts/test-iwd-backend.sh --yes
 ```
 
 By default the script uses the quick profile: 60 seconds current stability, 30

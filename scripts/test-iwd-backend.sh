@@ -2,20 +2,26 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/colors.sh
+. "$SCRIPT_DIR/lib/colors.sh"
 # shellcheck source=lib/sqlite.sh
 . "$SCRIPT_DIR/lib/sqlite.sh"
 # shellcheck source=lib/networkmanager.sh
 . "$SCRIPT_DIR/lib/networkmanager.sh"
 
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+ORIGINAL_ARGS=("$@")
+
 usage() {
   cat <<'EOF'
 Usage:
-  sudo scripts/test-iwd-backend.sh [options] [run_dir] [db_path]
+  ./scripts/test-iwd-backend.sh [options] [run_dir] [db_path]
 
 Default behavior:
   - quick smoke test: 60s current stability, 30s per BSSID mode, 5s samples
   - active Wi-Fi profile and interface are auto-detected
   - preferred BSSID defaults to the currently connected AP
+  - the script asks for sudo automatically before changing NetworkManager
   - interactive TTY runs show selection prompts and require typing YES
 
 Options:
@@ -38,7 +44,7 @@ EOF
 }
 
 die_usage() {
-  printf '%s\n' "$1" >&2
+  ui_error "$1"
   printf '%s\n' "" >&2
   usage >&2
   exit 2
@@ -192,9 +198,18 @@ if [ "$BASE_RUN_ID_FOR_SQL" = "$RUN_ID" ]; then
   BASE_RUN_ID_FOR_SQL=""
 fi
 
+rerun_with_sudo() {
+  if ! command -v sudo >/dev/null 2>&1; then
+    ui_error "This test changes NetworkManager and needs root, but sudo is not installed."
+    exit 1
+  fi
+
+  ui_warn "This test changes NetworkManager's Wi-Fi backend temporarily. Asking sudo now."
+  exec sudo --preserve-env=CONNECTION_UUID,CONNECTION_NAME,IFACE,PREFERRED_BSSID,SQLITE_BIN,IWD_TEST_MODE,IWD_NON_INTERACTIVE,IWD_UNIQUE_RUN,IWD_RUN_ID,BASE_RUN_DIR,BASE_RUN_ID,IWD_TEST_CONNECTION_NAME,SPEEDTEST_ROOT_DIR "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
-  printf '%s\n' "Run with sudo. This test changes NetworkManager's Wi-Fi backend temporarily." >&2
-  exit 1
+  rerun_with_sudo
 fi
 
 SOURCE_CONNECTION_UUID="${SOURCE_CONNECTION_UUID:-$(nm_active_wifi_connection_uuid)}"
@@ -232,7 +247,28 @@ ROLLBACK_RC=0
 
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    printf '%s\n' "Missing required command: $1" >&2
+    ui_error "Missing required command: $1"
+    case "$1" in
+      sqlite3|*/sqlite3)
+        ui_info "Install the SQLite command-line client with:"
+        ui_command_hint "sudo apt install sqlite3"
+        ;;
+      iw)
+        ui_info "Install the Wi-Fi inspection tool with:"
+        ui_command_hint "sudo apt install iw"
+        ;;
+      iwctl|iwd)
+        ui_info "Install iwd with:"
+        ui_command_hint "sudo apt install iwd"
+        ;;
+      nmcli|NetworkManager)
+        ui_info "Install NetworkManager with:"
+        ui_command_hint "sudo apt install network-manager"
+        ;;
+      systemctl)
+        ui_info "systemctl is provided by systemd on Ubuntu."
+        ;;
+    esac
     exit 1
   fi
 }

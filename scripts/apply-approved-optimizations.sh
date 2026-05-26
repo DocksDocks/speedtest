@@ -122,16 +122,32 @@ ensure_iwd_powersave_disabled() {
 
 stop_avahi_session() {
   local log_file="$1"
-  local socket_status=0
+  local units=()
+  local unit
+  local mask_status=0
   local service_status=0
+  local socket_status=0
+  local service_retry_status=0
+  local socket_retry_status=0
   local socket_state
   local service_state
 
+  for unit in avahi-daemon.service avahi-daemon.socket; do
+    if systemctl cat "$unit" >/dev/null 2>&1; then
+      units+=("$unit")
+    fi
+  done
+
+  if [ "${#units[@]}" -eq 0 ]; then
+    printf '%s\n' "Avahi units are not installed; nothing to stop." > "$log_file"
+    return 0
+  fi
+
   {
-    printf '%s\n' "Stopping avahi-daemon.socket first to prevent socket reactivation."
-    systemctl stop avahi-daemon.socket
-    socket_status=$?
-    printf '%s\n' "socket stop status: $socket_status"
+    printf '%s\n' "Runtime-masking Avahi service/socket to prevent activation until reboot or rollback."
+    systemctl mask --runtime "${units[@]}"
+    mask_status=$?
+    printf '%s\n' "runtime mask status: $mask_status"
     printf '%s\n' ""
 
     printf '%s\n' "Stopping avahi-daemon.service."
@@ -140,20 +156,43 @@ stop_avahi_session() {
     printf '%s\n' "service stop status: $service_status"
     printf '%s\n' ""
 
+    printf '%s\n' "Stopping avahi-daemon.socket."
+    systemctl stop avahi-daemon.socket
+    socket_status=$?
+    printf '%s\n' "socket stop status: $socket_status"
+    printf '%s\n' ""
+
     socket_state="$(systemctl is-active avahi-daemon.socket 2>/dev/null || true)"
     service_state="$(systemctl is-active avahi-daemon.service 2>/dev/null || true)"
+
+    if [ "$service_state" = "active" ] || [ "$service_state" = "activating" ] ||
+      [ "$socket_state" = "active" ] || [ "$socket_state" = "activating" ]; then
+      printf '%s\n' "Retrying Avahi stop after initial final-state check."
+      systemctl stop avahi-daemon.service
+      service_retry_status=$?
+      printf '%s\n' "service retry stop status: $service_retry_status"
+      systemctl stop avahi-daemon.socket
+      socket_retry_status=$?
+      printf '%s\n' "socket retry stop status: $socket_retry_status"
+      printf '%s\n' ""
+      socket_state="$(systemctl is-active avahi-daemon.socket 2>/dev/null || true)"
+      service_state="$(systemctl is-active avahi-daemon.service 2>/dev/null || true)"
+    fi
+
     printf '%s\n' "socket final state: ${socket_state:-unknown}"
     printf '%s\n' "service final state: ${service_state:-unknown}"
   } > "$log_file" 2>&1
 
   case "${socket_state:-unknown}" in
-    inactive|failed|unknown) ;;
-    *) return 1 ;;
+    active|activating|reloading) return 1 ;;
+    *) ;;
   esac
   case "${service_state:-unknown}" in
-    inactive|failed|unknown) ;;
-    *) return 1 ;;
+    active|activating|reloading) return 1 ;;
+    *) ;;
   esac
+
+  return 0
 }
 
 WIFI_DRIVER="${WIFI_DRIVER:-$(wifi_driver_for_iface "$IFACE")}"
@@ -318,7 +357,7 @@ show_change_preview() {
   print_change_row "runtime powersave" "$(runtime_powersave_state)" "off"
   print_change_row "iwd PowerSaveDisable" "$(iwd_powersave_disable_value)" "$target_iwd_powersave"
   print_change_row "DNS cache" "current cache" "flushed"
-  print_change_row "Avahi/mDNS" "$(service_state avahi-daemon.service)" "inactive"
+  print_change_row "Avahi/mDNS" "$(service_state avahi-daemon.service)" "inactive (runtime mask)"
   printf '%s\n' ""
   printf '%s\n' "Changed target values are highlighted in yellow. Unchanged rows stay neutral."
   printf '%s\n' ""
@@ -355,7 +394,7 @@ fi
   printf '%s\n' "iw dev \"$IFACE\" get power_save"
   printf '%s\n' "ensure $IWD_MAIN_CONF has [DriverQuirks] PowerSaveDisable=${WIFI_DRIVER:-<detected-driver>} when run as root"
   printf '%s\n' "resolvectl flush-caches"
-  printf '%s\n' "systemctl stop avahi-daemon.service avahi-daemon.socket"
+  printf '%s\n' "runtime-mask and stop avahi-daemon.service avahi-daemon.socket"
   printf '%s\n' ""
 } > "$RUN_DIR/apply-approved-optimizations.log"
 

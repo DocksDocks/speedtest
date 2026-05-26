@@ -31,6 +31,62 @@ fi
 
 speedtest_require_commands "${REQUIRED_COMMANDS[@]}" || exit 1
 
+restart_avahi_session() {
+  local log_file="$1"
+  local units=()
+  local unit
+  local unmask_status=0
+  local socket_status=0
+  local service_status=0
+  local socket_state
+  local service_state
+
+  for unit in avahi-daemon.service avahi-daemon.socket; do
+    if systemctl cat "$unit" >/dev/null 2>&1; then
+      units+=("$unit")
+    fi
+  done
+
+  if [ "${#units[@]}" -eq 0 ]; then
+    printf '%s\n' "Avahi units are not installed; nothing to restart." > "$log_file"
+    return 0
+  fi
+
+  {
+    printf '%s\n' "Removing runtime mask from Avahi service/socket."
+    systemctl unmask --runtime "${units[@]}"
+    unmask_status=$?
+    printf '%s\n' "runtime unmask status: $unmask_status"
+    printf '%s\n' ""
+
+    printf '%s\n' "Starting avahi-daemon.socket."
+    systemctl start avahi-daemon.socket
+    socket_status=$?
+    printf '%s\n' "socket start status: $socket_status"
+    printf '%s\n' ""
+
+    printf '%s\n' "Restarting avahi-daemon.service."
+    systemctl restart avahi-daemon.service
+    service_status=$?
+    printf '%s\n' "service restart status: $service_status"
+    printf '%s\n' ""
+
+    socket_state="$(systemctl is-active avahi-daemon.socket 2>/dev/null || true)"
+    service_state="$(systemctl is-active avahi-daemon.service 2>/dev/null || true)"
+    printf '%s\n' "socket final state: ${socket_state:-unknown}"
+    printf '%s\n' "service final state: ${service_state:-unknown}"
+  } > "$log_file" 2>&1
+
+  case "${socket_state:-unknown}" in
+    active) ;;
+    *) return 1 ;;
+  esac
+  case "${service_state:-unknown}" in
+    active) ;;
+    *) return 1 ;;
+  esac
+}
+
 mkdir -p "$RUN_DIR"
 
 cat <<EOF
@@ -61,7 +117,7 @@ fi
   printf '%s\n' "iw dev \"$IFACE\" set power_save off"
   printf '%s\n' "iw dev \"$IFACE\" get power_save"
   printf '%s\n' "resolvectl flush-caches"
-  printf '%s\n' "systemctl restart avahi-daemon.socket avahi-daemon.service"
+  printf '%s\n' "runtime-unmask and restart avahi-daemon.socket avahi-daemon.service"
   printf '%s\n' ""
 } > "$RUN_DIR/rollback-optimizations.log"
 
@@ -92,7 +148,7 @@ fi
 resolvectl flush-caches > "$RUN_DIR/rollback-resolvectl-flush-caches.txt" 2>&1
 resolvectl_status=$?
 
-systemctl restart avahi-daemon.socket avahi-daemon.service > "$RUN_DIR/rollback-avahi-restart.txt" 2>&1
+restart_avahi_session "$RUN_DIR/rollback-avahi-restart.txt"
 avahi_status=$?
 
 {

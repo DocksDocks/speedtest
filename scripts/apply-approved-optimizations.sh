@@ -270,8 +270,8 @@ show_change_preview() {
   target_iwd_powersave="$(display_or_unknown "$WIFI_DRIVER")"
 
   printf '%s\n' "This will apply network optimizations:"
-  printf '%s%-24s%s %s%-32s%s    %s%-32s%s\n' "$COLOR_BOLD" "Setting" "$COLOR_RESET" "$COLOR_CYAN" "Before" "$COLOR_RESET" "$COLOR_GREEN" "After" "$COLOR_RESET"
-  printf '%-24s %s%-32s%s %s%s%s %s%-32s%s\n' "" "$COLOR_CYAN" "current" "$COLOR_RESET" "$COLOR_YELLOW" "->" "$COLOR_RESET" "$COLOR_GREEN" "target" "$COLOR_RESET"
+  printf '  %s%-24s%s %s%-32s%s    %s%-32s%s\n' "$COLOR_BOLD" "Setting" "$COLOR_RESET" "$COLOR_CYAN" "Before" "$COLOR_RESET" "$COLOR_GREEN" "After" "$COLOR_RESET"
+  printf '  %-24s %s%-32s%s %s%s%s %s%-32s%s\n' "" "$COLOR_CYAN" "current" "$COLOR_RESET" "$COLOR_YELLOW" "->" "$COLOR_RESET" "$COLOR_GREEN" "target" "$COLOR_RESET"
   print_change_row "connection" "$CONNECTION_NAME" "$CONNECTION_NAME"
   print_change_row "interface" "$IFACE" "$IFACE"
   print_change_row "profile DNS" "$current_dns" "$target_dns"

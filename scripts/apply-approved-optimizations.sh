@@ -120,6 +120,42 @@ ensure_iwd_powersave_disabled() {
   printf 'Set [DriverQuirks] PowerSaveDisable=%s in %s\n' "$driver" "$conf" > "$log_file"
 }
 
+stop_avahi_session() {
+  local log_file="$1"
+  local socket_status=0
+  local service_status=0
+  local socket_state
+  local service_state
+
+  {
+    printf '%s\n' "Stopping avahi-daemon.socket first to prevent socket reactivation."
+    systemctl stop avahi-daemon.socket
+    socket_status=$?
+    printf '%s\n' "socket stop status: $socket_status"
+    printf '%s\n' ""
+
+    printf '%s\n' "Stopping avahi-daemon.service."
+    systemctl stop avahi-daemon.service
+    service_status=$?
+    printf '%s\n' "service stop status: $service_status"
+    printf '%s\n' ""
+
+    socket_state="$(systemctl is-active avahi-daemon.socket 2>/dev/null || true)"
+    service_state="$(systemctl is-active avahi-daemon.service 2>/dev/null || true)"
+    printf '%s\n' "socket final state: ${socket_state:-unknown}"
+    printf '%s\n' "service final state: ${service_state:-unknown}"
+  } > "$log_file" 2>&1
+
+  case "${socket_state:-unknown}" in
+    inactive|failed|unknown) ;;
+    *) return 1 ;;
+  esac
+  case "${service_state:-unknown}" in
+    inactive|failed|unknown) ;;
+    *) return 1 ;;
+  esac
+}
+
 WIFI_DRIVER="${WIFI_DRIVER:-$(wifi_driver_for_iface "$IFACE")}"
 
 mkdir -p "$RUN_DIR"
@@ -360,7 +396,7 @@ iwd_powersave_status=$?
 resolvectl flush-caches > "$RUN_DIR/optimize-resolvectl-flush-caches.txt" 2>&1
 resolvectl_status=$?
 
-systemctl stop avahi-daemon.service avahi-daemon.socket > "$RUN_DIR/optimize-avahi-stop.txt" 2>&1
+stop_avahi_session "$RUN_DIR/optimize-avahi-stop.txt"
 avahi_status=$?
 
 {

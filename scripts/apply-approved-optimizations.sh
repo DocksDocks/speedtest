@@ -317,6 +317,29 @@ print_change_row() {
     "$after_color" "$after" "$COLOR_RESET"
 }
 
+print_change_row_with_compare() {
+  local label="$1"
+  local before="$2"
+  local after="$3"
+  local before_compare="$4"
+  local after_compare="$5"
+  local arrow="=="
+  local arrow_color="$COLOR_RESET"
+  local after_color="$COLOR_RESET"
+
+  if [ "$before_compare" != "$after_compare" ]; then
+    arrow="->"
+    arrow_color="$COLOR_YELLOW"
+    after_color="$COLOR_YELLOW"
+  fi
+
+  printf '  %-24s %-32s %s%s%s %s%s%s\n' \
+    "$label" \
+    "$before" \
+    "$arrow_color" "$arrow" "$COLOR_RESET" \
+    "$after_color" "$after" "$COLOR_RESET"
+}
+
 show_change_preview() {
   local current_dns
   local target_dns
@@ -326,6 +349,8 @@ show_change_preview() {
   local target_bssid
   local current_powersave
   local target_iwd_powersave
+  local current_avahi
+  local target_avahi
 
   current_dns="$(display_or_empty "$(normalize_list_value "$(profile_setting ipv4.dns)")")"
   target_dns="$(normalize_list_value "$PRIMARY_DNS $SECONDARY_DNS")"
@@ -343,6 +368,11 @@ show_change_preview() {
 
   current_powersave="$(profile_powersave_value)"
   target_iwd_powersave="$(display_or_unknown "$WIFI_DRIVER")"
+  current_avahi="$(service_state avahi-daemon.service)"
+  target_avahi="inactive"
+  if [ "$current_avahi" = "inactive" ]; then
+    target_avahi="inactive (runtime mask)"
+  fi
 
   printf '%s\n' "This will apply network optimizations:"
   printf '  %s%-24s%s %s%-32s%s    %s%-32s%s\n' "$COLOR_BOLD" "Setting" "$COLOR_RESET" "$COLOR_CYAN" "Before" "$COLOR_RESET" "$COLOR_GREEN" "After" "$COLOR_RESET"
@@ -357,7 +387,7 @@ show_change_preview() {
   print_change_row "runtime powersave" "$(runtime_powersave_state)" "off"
   print_change_row "iwd PowerSaveDisable" "$(iwd_powersave_disable_value)" "$target_iwd_powersave"
   print_change_row "DNS cache" "current cache" "flushed"
-  print_change_row "Avahi/mDNS" "$(service_state avahi-daemon.service)" "inactive (runtime mask)"
+  print_change_row_with_compare "Avahi/mDNS" "$current_avahi" "$target_avahi" "$current_avahi" "inactive"
   printf '%s\n' ""
   printf '%s\n' "Changed target values are highlighted in yellow. Unchanged rows stay neutral."
   printf '%s\n' ""

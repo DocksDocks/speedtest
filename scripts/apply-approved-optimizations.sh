@@ -8,6 +8,8 @@ ORIGINAL_ARGS=("$@")
 . "$SCRIPT_DIR/lib/path.sh"
 # shellcheck source=lib/warnings.sh
 . "$SCRIPT_DIR/lib/warnings.sh"
+# shellcheck source=lib/networkmanager.sh
+. "$SCRIPT_DIR/lib/networkmanager.sh"
 
 RUN_DIR="${RUN_DIR:-$(speedtest_default_run_dir)}"
 CONNECTION_NAME="${CONNECTION_NAME:-$(speedtest_default_connection_name)}"
@@ -18,6 +20,7 @@ DNS_SEARCH="${DNS_SEARCH:-}"
 PREFERRED_BSSID="${PREFERRED_BSSID:-}"
 IWD_MAIN_CONF="${IWD_MAIN_CONF:-/etc/iwd/main.conf}"
 WIFI_DRIVER="${WIFI_DRIVER:-}"
+CONNECTION_UUID="${CONNECTION_UUID:-}"
 REQUIRED_COMMANDS=(nmcli iw resolvectl systemctl)
 
 if [ -z "$CONNECTION_NAME" ] || [ -z "$IFACE" ]; then
@@ -27,7 +30,7 @@ fi
 
 rerun_with_sudo() {
   ui_warn "This script changes NetworkManager, DNS, iwd, and service state. Asking sudo now."
-  exec sudo --preserve-env=RUN_DIR,CONNECTION_NAME,IFACE,PRIMARY_DNS,SECONDARY_DNS,DNS_SEARCH,PREFERRED_BSSID,IWD_MAIN_CONF,WIFI_DRIVER,SPEEDTEST_ROOT_DIR "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
+  exec sudo --preserve-env=RUN_DIR,CONNECTION_NAME,CONNECTION_UUID,IFACE,PRIMARY_DNS,SECONDARY_DNS,DNS_SEARCH,PREFERRED_BSSID,IWD_MAIN_CONF,WIFI_DRIVER,SPEEDTEST_ROOT_DIR "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -36,6 +39,8 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 speedtest_require_commands "${REQUIRED_COMMANDS[@]}" || exit 1
+
+CONNECTION_UUID="${CONNECTION_UUID:-$(nm_connection_uuid_for_name "$CONNECTION_NAME")}"
 
 wifi_driver_for_iface() {
   local iface="$1"
@@ -119,21 +124,172 @@ WIFI_DRIVER="${WIFI_DRIVER:-$(wifi_driver_for_iface "$IFACE")}"
 
 mkdir -p "$RUN_DIR"
 
-cat <<EOF
-This will apply network optimizations to:
-  connection: $CONNECTION_NAME
-  interface:  $IFACE
-  DNS:        $PRIMARY_DNS $SECONDARY_DNS
-  search:     ${DNS_SEARCH:-<unchanged>}
-  BSSID pin:  ${PREFERRED_BSSID:-<unchanged>}
-  driver:     ${WIFI_DRIVER:-<unknown>}
+trim_words() {
+  awk '{$1=$1; print}'
+}
 
-It will also disable Wi-Fi power saving for this profile, flush DNS cache,
-force runtime Wi-Fi power saving off, persist the iwd powersave driver quirk
-when run as root, and stop Avahi/mDNS for this session.
+display_or_empty() {
+  local value="${1:-}"
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "<empty>"
+  fi
+}
 
-Type APPLY to continue:
-EOF
+display_or_unknown() {
+  local value="${1:-}"
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "<unknown>"
+  fi
+}
+
+normalize_list_value() {
+  printf '%s' "${1:-}" | tr ',' ' ' | trim_words
+}
+
+profile_setting() {
+  nm_connection_field_value "$CONNECTION_UUID" "$CONNECTION_NAME" "$1" | nm_unescape_colons
+}
+
+runtime_powersave_state() {
+  local state
+
+  state="$(iw dev "$IFACE" get power_save 2>/dev/null | awk -F': ' '/Power save:/ {print $2; exit}')"
+  display_or_unknown "$state"
+}
+
+iwd_powersave_disable_value() {
+  if [ ! -f "$IWD_MAIN_CONF" ]; then
+    printf '%s\n' "<unset>"
+    return
+  fi
+
+  awk '
+    /^\[DriverQuirks\]$/ {
+      in_section = 1
+      next
+    }
+    /^\[/ {
+      in_section = 0
+    }
+    in_section && /^[[:space:]]*PowerSaveDisable[[:space:]]*=/ {
+      sub(/^[^=]*=/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      print
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        print "<unset>"
+      }
+    }
+  ' "$IWD_MAIN_CONF" 2>/dev/null
+}
+
+profile_powersave_value() {
+  local value
+
+  value="$(profile_setting 802-11-wireless.powersave)"
+  case "$value" in
+    "")
+      printf '%s\n' "<empty>"
+      ;;
+    *disable*|2)
+      printf '%s\n' "disable"
+      ;;
+    *enable*|3)
+      printf '%s\n' "enable"
+      ;;
+    *default*|0)
+      printf '%s\n' "default"
+      ;;
+    *)
+      printf '%s\n' "$value"
+      ;;
+  esac
+}
+
+service_state() {
+  local service_name="$1"
+  local state
+
+  state="$(systemctl is-active "$service_name" 2>/dev/null || true)"
+  display_or_unknown "$state"
+}
+
+print_change_row() {
+  local label="$1"
+  local before="$2"
+  local after="$3"
+  local arrow="=="
+  local arrow_color="$COLOR_RESET"
+  local after_color="$COLOR_RESET"
+
+  if [ "$before" != "$after" ]; then
+    arrow="->"
+    arrow_color="$COLOR_YELLOW"
+    after_color="$COLOR_YELLOW"
+  fi
+
+  printf '  %-24s %-32s %s%s%s %s%s%s\n' \
+    "$label" \
+    "$before" \
+    "$arrow_color" "$arrow" "$COLOR_RESET" \
+    "$after_color" "$after" "$COLOR_RESET"
+}
+
+show_change_preview() {
+  local current_dns
+  local target_dns
+  local current_dns_search
+  local target_dns_search
+  local current_bssid
+  local target_bssid
+  local current_powersave
+  local target_iwd_powersave
+
+  current_dns="$(display_or_empty "$(normalize_list_value "$(profile_setting ipv4.dns)")")"
+  target_dns="$(normalize_list_value "$PRIMARY_DNS $SECONDARY_DNS")"
+  current_dns_search="$(display_or_empty "$(normalize_list_value "$(profile_setting ipv4.dns-search)")")"
+  target_dns_search="$current_dns_search"
+  if [ -n "$DNS_SEARCH" ]; then
+    target_dns_search="$(normalize_list_value "$DNS_SEARCH")"
+  fi
+
+  current_bssid="$(display_or_empty "$(profile_setting 802-11-wireless.bssid)")"
+  target_bssid="$current_bssid"
+  if [ -n "$PREFERRED_BSSID" ]; then
+    target_bssid="$PREFERRED_BSSID"
+  fi
+
+  current_powersave="$(profile_powersave_value)"
+  target_iwd_powersave="$(display_or_unknown "$WIFI_DRIVER")"
+
+  printf '%s\n' "This will apply network optimizations:"
+  printf '%s%-24s%s %s%-32s%s    %s%-32s%s\n' "$COLOR_BOLD" "Setting" "$COLOR_RESET" "$COLOR_CYAN" "Before" "$COLOR_RESET" "$COLOR_GREEN" "After" "$COLOR_RESET"
+  printf '%-24s %s%-32s%s %s%s%s %s%-32s%s\n' "" "$COLOR_CYAN" "current" "$COLOR_RESET" "$COLOR_YELLOW" "->" "$COLOR_RESET" "$COLOR_GREEN" "target" "$COLOR_RESET"
+  print_change_row "connection" "$CONNECTION_NAME" "$CONNECTION_NAME"
+  print_change_row "interface" "$IFACE" "$IFACE"
+  print_change_row "profile DNS" "$current_dns" "$target_dns"
+  print_change_row "ignore auto DNS" "$(display_or_empty "$(profile_setting ipv4.ignore-auto-dns)")" "yes"
+  print_change_row "DNS search" "$current_dns_search" "$target_dns_search"
+  print_change_row "BSSID pin" "$current_bssid" "$target_bssid"
+  print_change_row "profile powersave" "$current_powersave" "disable"
+  print_change_row "runtime powersave" "$(runtime_powersave_state)" "off"
+  print_change_row "iwd PowerSaveDisable" "$(iwd_powersave_disable_value)" "$target_iwd_powersave"
+  print_change_row "DNS cache" "current cache" "flushed"
+  print_change_row "Avahi/mDNS" "$(service_state avahi-daemon.service)" "inactive"
+  printf '%s\n' ""
+  printf '%s\n' "Changed target values are highlighted in yellow. Unchanged rows stay neutral."
+  printf '%s\n' ""
+  printf '%s\n' "Type APPLY to continue:"
+}
+
+show_change_preview
 
 read -r confirmation
 if [ "$confirmation" != "APPLY" ]; then

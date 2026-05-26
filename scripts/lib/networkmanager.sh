@@ -81,6 +81,32 @@ nm_connection_up() {
   "${cmd[@]}"
 }
 
+nm_wifi_profiles_for_ssid() {
+  local target_ssid="${1:-}"
+  local uuid
+  local type
+  local ssid
+  local name
+
+  if [ -z "$target_ssid" ]; then
+    return 1
+  fi
+
+  while IFS=: read -r uuid type; do
+    if [ "$type" != "802-11-wireless" ]; then
+      continue
+    fi
+
+    ssid="$(nm_connection_field_value "$uuid" "" 802-11-wireless.ssid | nm_unescape_colons)"
+    if [ "$ssid" != "$target_ssid" ]; then
+      continue
+    fi
+
+    name="$(nm_connection_name_for_uuid "$uuid")"
+    printf '%s\t%s\n' "$name" "$uuid"
+  done < <(nmcli -t --escape no -f UUID,TYPE connection show 2>/dev/null)
+}
+
 nm_unescape_colons() {
   sed 's/\\:/:/g'
 }

@@ -118,13 +118,18 @@ scripts/apply-approved-optimizations.sh
 scripts/rollback-optimizations.sh
 ```
 
-Both scripts require a typed confirmation before changing settings.
+Both scripts preflight required commands and print `apt install` hints for
+missing packages. They ask for sudo automatically before changing settings, then
+require a typed confirmation. Wi-Fi powersave is always kept disabled; rollback
+does not restore powersave defaults. When iwd is active, the apply script also
+uses sudo to persist iwd's `DriverQuirks.PowerSaveDisable` setting.
 
 ## iwd Backend Test
 
 The iwd test temporarily switches NetworkManager's Wi-Fi backend, runs the same
-stability/BSSID sample, and rolls back automatically. It requires root, and the
-Wi-Fi link will briefly drop while NetworkManager restarts.
+stability/BSSID sample, and rolls back automatically. It preflights required
+commands, asks for sudo when not already root, and the Wi-Fi link will briefly
+drop while NetworkManager restarts.
 
 ```bash
 sudo apt install -y iwd
@@ -151,12 +156,12 @@ Set `IWD_UNIQUE_RUN=0` only when you intentionally want to reuse the exact run
 directory. The script writes `iwd-rollback.sh` inside the attempt folder before
 changing NetworkManager.
 
-The script clones the active authenticated NetworkManager profile first and runs
-the iwd experiment against that cloned profile UUID. The original profile is
-used for rollback, and the clone is deleted only after the original profile
-comes back up successfully. If rollback cannot activate the original profile,
-the cloned profile is left in NetworkManager as a recovery option and the script
-exits non-zero instead of reporting success.
+The script uses the active authenticated NetworkManager profile directly and
+does not clone saved Wi-Fi profiles. Before changing NetworkManager, it refuses
+to run if more than one saved profile uses the active SSID, then writes
+`iwd-rollback.sh` so the original backend and BSSID setting can be restored.
+If rollback fails, the existing profile is left in place and the script exits
+non-zero instead of reporting success.
 
 ## Privacy
 

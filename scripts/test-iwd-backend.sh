@@ -4,6 +4,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/colors.sh
 . "$SCRIPT_DIR/lib/colors.sh"
+# shellcheck source=lib/warnings.sh
+. "$SCRIPT_DIR/lib/warnings.sh"
 # shellcheck source=lib/sqlite.sh
 . "$SCRIPT_DIR/lib/sqlite.sh"
 # shellcheck source=lib/networkmanager.sh
@@ -75,6 +77,7 @@ fi
 IWD_TEST_MODE="${IWD_TEST_MODE:-quick}"
 IWD_NON_INTERACTIVE="${IWD_NON_INTERACTIVE:-0}"
 IWD_ASSUME_YES=0
+IWD_REQUIRED_COMMANDS=(iwctl iw nmcli systemctl NetworkManager)
 
 POSITIONAL_ARGS=()
 while [ "$#" -gt 0 ]; do
@@ -199,16 +202,13 @@ if [ "$BASE_RUN_ID_FOR_SQL" = "$RUN_ID" ]; then
 fi
 
 rerun_with_sudo() {
-  if ! command -v sudo >/dev/null 2>&1; then
-    ui_error "This test changes NetworkManager and needs root, but sudo is not installed."
-    exit 1
-  fi
-
   ui_warn "This test changes NetworkManager's Wi-Fi backend temporarily. Asking sudo now."
-  exec sudo --preserve-env=CONNECTION_UUID,CONNECTION_NAME,IFACE,PREFERRED_BSSID,SQLITE_BIN,IWD_TEST_MODE,IWD_NON_INTERACTIVE,IWD_UNIQUE_RUN,IWD_RUN_ID,BASE_RUN_DIR,BASE_RUN_ID,IWD_TEST_CONNECTION_NAME,SPEEDTEST_ROOT_DIR "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
+  exec sudo --preserve-env=CONNECTION_UUID,CONNECTION_NAME,IFACE,PREFERRED_BSSID,SQLITE_BIN,IWD_TEST_MODE,IWD_NON_INTERACTIVE,IWD_UNIQUE_RUN,IWD_RUN_ID,BASE_RUN_DIR,BASE_RUN_ID,SPEEDTEST_ROOT_DIR "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
 }
 
 if [ "$(id -u)" -ne 0 ]; then
+  SQLITE_BIN="${SQLITE_BIN:-$(speedtest_sqlite_bin)}"
+  speedtest_require_commands sudo "${IWD_REQUIRED_COMMANDS[@]}" "$SQLITE_BIN" || exit 1
   rerun_with_sudo
 fi
 
@@ -236,42 +236,15 @@ mkdir -p "$RUN_DIR"
 BACKUP_DIR="$RUN_DIR/iwd-backup-$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="$RUN_DIR/iwd-backend-test.log"
 ROLLBACK_SCRIPT="$RUN_DIR/iwd-rollback.sh"
-TEST_CONNECTION_NAME="${IWD_TEST_CONNECTION_NAME:-speedtest-iwd-$RUN_ID}"
-TEST_CONNECTION_UUID=""
+TEST_CONNECTION_NAME="$SOURCE_CONNECTION_NAME"
+TEST_CONNECTION_UUID="$SOURCE_CONNECTION_UUID"
+SOURCE_SSID=""
 ORIGINAL_BSSID=""
 ORIGINAL_AUTOCONNECT=""
 RESTORE_DONE=0
 ROLLBACK_READY=0
 BACKEND_TEST_STATUS="started"
 ROLLBACK_RC=0
-
-need_command() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    ui_error "Missing required command: $1"
-    case "$1" in
-      sqlite3|*/sqlite3)
-        ui_info "Install the SQLite command-line client with:"
-        ui_command_hint "sudo apt install sqlite3"
-        ;;
-      iw)
-        ui_info "Install the Wi-Fi inspection tool with:"
-        ui_command_hint "sudo apt install iw"
-        ;;
-      iwctl|iwd)
-        ui_info "Install iwd with:"
-        ui_command_hint "sudo apt install iwd"
-        ;;
-      nmcli|NetworkManager)
-        ui_info "Install NetworkManager with:"
-        ui_command_hint "sudo apt install network-manager"
-        ;;
-      systemctl)
-        ui_info "systemctl is provided by systemd on Ubuntu."
-        ;;
-    esac
-    exit 1
-  fi
-}
 
 shell_escape_single() {
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
@@ -486,6 +459,27 @@ confirm_iwd_test() {
   CONFIRM_IWD_TEST=YES
 }
 
+nonempty_line_count() {
+  awk 'NF { count++ } END { print count + 0 }'
+}
+
+assert_single_wifi_profile_for_ssid() {
+  local ssid="$1"
+  local profiles
+  local profile_count
+
+  profiles="$(nm_wifi_profiles_for_ssid "$ssid")"
+  profile_count="$(printf '%s\n' "$profiles" | nonempty_line_count)"
+  if [ "$profile_count" -le 1 ]; then
+    return 0
+  fi
+
+  ui_error "Refusing to run iwd backend test: multiple saved Wi-Fi profiles use SSID '$ssid'."
+  ui_info "Clean duplicate profiles first, then rerun the test. Matching profiles:"
+  printf '%s\n' "$profiles" | awk -F '\t' 'NF { printf "  - %s (%s)\n", $1, $2 }' >&2
+  exit 1
+}
+
 record_backend_test() {
   sqlite_exec "$DB_PATH" "
   INSERT INTO wifi_backend_tests (
@@ -547,7 +541,6 @@ record_backend_test() {
 write_rollback_script() {
   local escaped_source_uuid
   local escaped_source_name
-  local escaped_test_uuid
   local escaped_iface
   local escaped_bssid
   local escaped_autoconnect
@@ -555,7 +548,6 @@ write_rollback_script() {
 
   escaped_source_uuid="$(shell_escape_single "$SOURCE_CONNECTION_UUID")"
   escaped_source_name="$(shell_escape_single "$SOURCE_CONNECTION_NAME")"
-  escaped_test_uuid="$(shell_escape_single "$TEST_CONNECTION_UUID")"
   escaped_iface="$(shell_escape_single "$IFACE")"
   escaped_bssid="$(shell_escape_single "$ORIGINAL_BSSID")"
   escaped_autoconnect="$(shell_escape_single "$ORIGINAL_AUTOCONNECT")"
@@ -567,7 +559,6 @@ set -u
 
 SOURCE_CONNECTION_UUID='$escaped_source_uuid'
 SOURCE_CONNECTION_NAME='$escaped_source_name'
-TEST_CONNECTION_UUID='$escaped_test_uuid'
 IFACE='$escaped_iface'
 ORIGINAL_BSSID='$escaped_bssid'
 ORIGINAL_AUTOCONNECT='$escaped_autoconnect'
@@ -630,17 +621,13 @@ fi
 run_or_mark nm_source_modify 802-11-wireless.bssid "\$ORIGINAL_BSSID"
 run_or_mark nm_source_up
 
-if [ "\$ROLLBACK_FAILED" -eq 0 ] && [ -n "\$TEST_CONNECTION_UUID" ]; then
-  nmcli connection delete uuid "\$TEST_CONNECTION_UUID" >/dev/null 2>&1 || true
-fi
-
 if [ "\$ROLLBACK_FAILED" -eq 0 ]; then
   systemctl stop iwd.service 2>/dev/null || true
   printf '%s\n' "Rollback complete."
   exit 0
 fi
 
-printf '%s\n' "Rollback finished with errors. The cloned test profile was left in NetworkManager for manual recovery." >&2
+printf '%s\n' "Rollback finished with errors. The existing profile was not deleted; inspect NetworkManager before retrying." >&2
 exit 1
 EOF
 
@@ -687,12 +674,7 @@ trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-need_command iwctl
-need_command iw
-need_command nmcli
-need_command systemctl
-need_command NetworkManager
-need_command "$SQLITE_BIN"
+speedtest_require_commands "${IWD_REQUIRED_COMMANDS[@]}" "$SQLITE_BIN" || exit 1
 
 if is_interactive && [ "$IWD_MODE_EXPLICIT" -ne 1 ]; then
   prompt_test_mode
@@ -704,6 +686,9 @@ validate_positive_int "SAMPLE_INTERVAL" "$SAMPLE_INTERVAL"
 
 ORIGINAL_BSSID="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" 802-11-wireless.bssid | nm_unescape_colons)"
 ORIGINAL_AUTOCONNECT="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" connection.autoconnect)"
+SOURCE_SSID="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" 802-11-wireless.ssid | nm_unescape_colons)"
+SOURCE_SSID="${SOURCE_SSID:-$SOURCE_CONNECTION_NAME}"
+assert_single_wifi_profile_for_ssid "$SOURCE_SSID"
 choose_preferred_bssid
 if [ -z "$PREFERRED_BSSID" ]; then
   printf '%s\n' "Could not auto-detect a BSSID. Use --bssid <ap-bssid>." >&2
@@ -745,7 +730,8 @@ fi
   printf '%s\n' "Run dir: $RUN_DIR"
   printf '%s\n' "Source connection: $SOURCE_CONNECTION_NAME"
   printf '%s\n' "Source UUID: $SOURCE_CONNECTION_UUID"
-  printf '%s\n' "Test connection: $TEST_CONNECTION_NAME"
+  printf '%s\n' "Source SSID: $SOURCE_SSID"
+  printf '%s\n' "Profile under test: $TEST_CONNECTION_NAME"
   printf '%s\n' "Interface: $IFACE"
   printf '%s\n' "Preferred BSSID: $PREFERRED_BSSID"
   printf '%s\n' "NetworkManager version: $(NetworkManager --version 2>/dev/null || true)"
@@ -755,36 +741,19 @@ fi
 
 NetworkManager --print-config > "$BACKUP_DIR/networkmanager-print-config-before.txt" 2>&1 || true
 printf '%s\n' "$ORIGINAL_BSSID" > "$BACKUP_DIR/original-bssid.txt"
-printf '%s\n' "Effective preferred BSSID: $PREFERRED_BSSID" >> "$LOG_FILE"
-printf '%s\n' "Original autoconnect: ${ORIGINAL_AUTOCONNECT:-<unknown>}" >> "$LOG_FILE"
+{
+  printf '%s\n' "Effective preferred BSSID: $PREFERRED_BSSID"
+  printf '%s\n' "Original autoconnect: ${ORIGINAL_AUTOCONNECT:-<unknown>}"
+} >> "$LOG_FILE"
 
 {
-  printf '%s\n' "[$(date)] Cloning source NetworkManager profile for isolated iwd test"
-  printf '%s\n' "Source selector: uuid $SOURCE_CONNECTION_UUID"
+  printf '%s\n' "[$(date)] Using existing NetworkManager profile for iwd backend test"
+  printf '%s\n' "Profile selector: uuid $TEST_CONNECTION_UUID"
 } >> "$LOG_FILE"
-if ! nmcli connection clone uuid "$SOURCE_CONNECTION_UUID" "$TEST_CONNECTION_NAME" >> "$LOG_FILE" 2>&1; then
-  BACKEND_TEST_STATUS="failed"
-  record_backend_test "failed to clone source NetworkManager profile"
-  exit 1
-fi
-TEST_CONNECTION_UUID="$(nm_connection_uuid_for_name "$TEST_CONNECTION_NAME")"
-if [ -z "$TEST_CONNECTION_UUID" ]; then
-  BACKEND_TEST_STATUS="failed"
-  record_backend_test "cloned profile UUID could not be resolved"
-  exit 1
-fi
-if ! nm_connection_modify "$TEST_CONNECTION_UUID" "$TEST_CONNECTION_NAME" \
-  connection.autoconnect yes \
-  802-11-wireless.bssid "$PREFERRED_BSSID" >> "$LOG_FILE" 2>&1; then
-  nmcli connection delete uuid "$TEST_CONNECTION_UUID" >/dev/null 2>&1 || true
-  BACKEND_TEST_STATUS="failed"
-  record_backend_test "failed to prepare cloned NetworkManager profile"
-  exit 1
-fi
 
 write_rollback_script
 BACKEND_TEST_STATUS="rollback_ready"
-record_backend_test "rollback script written before backend switch; iwd test uses cloned profile"
+record_backend_test "rollback script written before backend switch; iwd test uses existing profile and creates no clone"
 
 if [ -f "$IWD_CONF" ]; then
   cp "$IWD_CONF" "$BACKUP_DIR/90-speedtest-iwd.conf.before"
@@ -819,19 +788,19 @@ BACKEND_TEST_STATUS="networkmanager_iwd"
 record_backend_test "NetworkManager restarted with iwd backend config"
 
 {
-  printf '%s\n' "[$(date)] Bringing up cloned profile on iwd backend"
-  printf '%s\n' "Test selector: uuid $TEST_CONNECTION_UUID"
+  printf '%s\n' "[$(date)] Bringing up existing profile on iwd backend"
+  printf '%s\n' "Profile selector: uuid $TEST_CONNECTION_UUID"
 } >> "$LOG_FILE"
 
 if ! nm_connection_up "$TEST_CONNECTION_UUID" "$TEST_CONNECTION_NAME" "$IFACE" "$PREFERRED_BSSID" >> "$LOG_FILE" 2>&1; then
   BACKEND_TEST_STATUS="failed"
-  record_backend_test "failed to activate cloned profile on iwd backend; rollback attempted"
+  record_backend_test "failed to activate existing profile on iwd backend; rollback attempted"
   restore_backend || true
   exit 1
 fi
 sleep 12
 BACKEND_TEST_STATUS="connected_iwd"
-record_backend_test "cloned profile connection up requested on iwd backend"
+record_backend_test "existing profile connection up requested on iwd backend"
 
 NetworkManager --print-config > "$BACKUP_DIR/networkmanager-print-config-iwd.txt" 2>&1 || true
 systemctl is-active iwd.service > "$BACKUP_DIR/iwd-active.txt" 2>&1 || true
@@ -857,7 +826,7 @@ env \
 
 if restore_backend; then
   BACKEND_TEST_STATUS="rolled_back"
-  record_backend_test "rollback completed after iwd sample; cloned test profile removed"
+  record_backend_test "rollback completed after iwd sample; no NetworkManager profile was cloned"
 else
   ROLLBACK_RC=$?
   BACKEND_TEST_STATUS="failed"

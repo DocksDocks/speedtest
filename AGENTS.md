@@ -4,7 +4,7 @@
 
 - Purpose: local network diagnostics, raw-log ingestion, SQLite metric storage, and static browser reporting.
 - Shell entry points: `scripts/*.sh`.
-- Shared shell libraries: `scripts/lib/path.sh`, `scripts/lib/sqlite.sh`, `scripts/lib/classification.sh`, `scripts/lib/report.sh`, `scripts/lib/networkmanager.sh`, `scripts/lib/colors.sh`.
+- Shared shell libraries: `scripts/lib/path.sh`, `scripts/lib/sqlite.sh`, `scripts/lib/classification.sh`, `scripts/lib/report.sh`, `scripts/lib/networkmanager.sh`, `scripts/lib/colors.sh`, `scripts/lib/warnings.sh`.
 - SQLite schema: `db/schema/*.sql`; seed/default data: `db/defaults/*.sql`, `db/seed.sql`.
 - Browser report: `index.html`, `assets/report.css`, `assets/report.js`.
 - Project-local skills: `.agents/skills/sqlite3-quality/SKILL.md`, `.agents/skills/bash-diagnostics/SKILL.md`.
@@ -31,6 +31,7 @@
 
 - Use `.agents/skills/bash-diagnostics/SKILL.md` before changing collection, ingestion, report, rollback, NetworkManager, or iwd scripts.
 - Source `scripts/lib/path.sh` or `scripts/lib/sqlite.sh` for project paths; do not hard-code absolute user paths.
+- Source `scripts/lib/warnings.sh` when a script has required commands so missing dependency output stays aggregated and includes install hints.
 - Detect Wi-Fi interface/profile with `speedtest_default_wifi_iface` and `speedtest_default_connection_name`.
 - Site-specific values such as SSID, BSSID, DNS search domain, or local gateway must be env vars or DB data, not committed defaults.
 - Scripts that change NetworkManager, DNS, Avahi, or iwd must require explicit confirmation or documented root invocation.

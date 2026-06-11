@@ -184,6 +184,7 @@ fi
 REQUESTED_RUN_DIR="${REQUESTED_RUN_DIR:-${POSITIONAL_ARGS[0]:-$(speedtest_default_run_dir)}}"
 DB_PATH="${DB_PATH:-${POSITIONAL_ARGS[1]:-$(speedtest_default_db)}}"
 IWD_CONF="/etc/NetworkManager/conf.d/90-speedtest-iwd.conf"
+BACKEND_PIN_CONF="/etc/NetworkManager/conf.d/10-wifi-backend.conf"
 BASE_RUN_DIR="${BASE_RUN_DIR:-$REQUESTED_RUN_DIR}"
 BASE_RUN_ID="${BASE_RUN_ID:-$(basename "$BASE_RUN_DIR")}"
 IWD_UNIQUE_RUN="${IWD_UNIQUE_RUN:-1}"
@@ -480,6 +481,40 @@ assert_single_wifi_profile_for_ssid() {
   exit 1
 }
 
+wifi_driver_for_iface() {
+  local driver_path
+
+  driver_path="$(readlink -f "/sys/class/net/$1/device/driver" 2>/dev/null || true)"
+  if [ -n "$driver_path" ]; then
+    basename "$driver_path"
+  fi
+}
+
+warn_persistent_backend_configs() {
+  local conf_file
+  local matches=""
+
+  for conf_file in /usr/lib/NetworkManager/conf.d/*.conf /run/NetworkManager/conf.d/*.conf /etc/NetworkManager/conf.d/*.conf /etc/NetworkManager/NetworkManager.conf; do
+    [ -f "$conf_file" ] || continue
+    if [ "$conf_file" = "$IWD_CONF" ] || [ "$conf_file" = "$BACKEND_PIN_CONF" ]; then
+      continue
+    fi
+    if grep -qE '^[[:space:]]*wifi\.backend[[:space:]]*=[[:space:]]*iwd' "$conf_file" 2>/dev/null; then
+      matches="${matches}  - ${conf_file}
+"
+    fi
+  done
+
+  if [ -z "$matches" ]; then
+    return 0
+  fi
+
+  ui_warn "wifi.backend=iwd is configured outside this test (the Ubuntu iwd package ships such a file):"
+  printf '%s' "$matches" >&2
+  ui_warn "Without an /etc override the system stays on the iwd backend after the next reboot."
+  ui_info "Rollback pins wifi.backend=wpa_supplicant in $BACKEND_PIN_CONF to neutralize it."
+}
+
 record_backend_test() {
   sqlite_exec "$DB_PATH" "
   INSERT INTO wifi_backend_tests (
@@ -545,6 +580,7 @@ write_rollback_script() {
   local escaped_bssid
   local escaped_autoconnect
   local escaped_backup_conf
+  local escaped_driver
 
   escaped_source_uuid="$(shell_escape_single "$SOURCE_CONNECTION_UUID")"
   escaped_source_name="$(shell_escape_single "$SOURCE_CONNECTION_NAME")"
@@ -552,6 +588,7 @@ write_rollback_script() {
   escaped_bssid="$(shell_escape_single "$ORIGINAL_BSSID")"
   escaped_autoconnect="$(shell_escape_single "$ORIGINAL_AUTOCONNECT")"
   escaped_backup_conf="$(shell_escape_single "$BACKUP_DIR/90-speedtest-iwd.conf.before")"
+  escaped_driver="$(shell_escape_single "$WIFI_DRIVER")"
 
   cat > "$ROLLBACK_SCRIPT" <<EOF
 #!/usr/bin/env bash
@@ -564,6 +601,8 @@ ORIGINAL_BSSID='$escaped_bssid'
 ORIGINAL_AUTOCONNECT='$escaped_autoconnect'
 IWD_CONF='$IWD_CONF'
 BACKUP_CONF='$escaped_backup_conf'
+BACKEND_PIN_CONF='$BACKEND_PIN_CONF'
+WIFI_DRIVER='$escaped_driver'
 ROLLBACK_FAILED=0
 
 mark_failed() {
@@ -603,6 +642,48 @@ nm_source_up() {
   "\${cmd[@]}"
 }
 
+wifi_iface_present() {
+  local dev
+  for dev in /sys/class/net/*; do
+    if [ -d "\$dev/wireless" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+detect_wifi_iface() {
+  local dev
+  for dev in /sys/class/net/*; do
+    if [ -d "\$dev/wireless" ]; then
+      basename "\$dev"
+      return 0
+    fi
+  done
+}
+
+recover_wifi_iface() {
+  # Stopping iwd can delete the interface it created; reload the driver to recreate it.
+  if wifi_iface_present; then
+    return 0
+  fi
+  if [ -z "\$WIFI_DRIVER" ]; then
+    mark_failed 1 "no Wi-Fi interface present and no driver recorded for reload"
+    return 1
+  fi
+  printf '%s\n' "Wi-Fi interface missing after stopping iwd; reloading driver \$WIFI_DRIVER."
+  run_or_mark modprobe -r "\$WIFI_DRIVER"
+  run_or_mark modprobe "\$WIFI_DRIVER"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if wifi_iface_present; then
+      return 0
+    fi
+    sleep 1
+  done
+  mark_failed 1 "Wi-Fi interface did not reappear after reloading \$WIFI_DRIVER"
+  return 1
+}
+
 printf '%s\n' "Rolling back NetworkManager Wi-Fi backend to wpa_supplicant..."
 if [ -f "\$BACKUP_CONF" ]; then
   run_or_mark cp "\$BACKUP_CONF" "\$IWD_CONF"
@@ -610,10 +691,29 @@ else
   run_or_mark rm -f "\$IWD_CONF"
 fi
 
+# The iwd package ships /usr/lib/NetworkManager/conf.d/iwd.conf (wifi.backend=iwd),
+# so removing this test's conf alone leaves the system on iwd after a reboot. Pin
+# wpa_supplicant in /etc; the 10- prefix sorts before this test's 90- file, so
+# future test runs can still override it.
+if [ ! -f "\$BACKEND_PIN_CONF" ]; then
+  printf '[device]\nwifi.backend=wpa_supplicant\n' > "\$BACKEND_PIN_CONF" || mark_failed \$? "write \$BACKEND_PIN_CONF"
+fi
+
+# Stop iwd before restarting NetworkManager, regardless of earlier failures.
+systemctl stop iwd.service 2>/dev/null || true
+recover_wifi_iface || true
+
+if [ ! -e "/sys/class/net/\$IFACE" ]; then
+  IFACE="\$(detect_wifi_iface)"
+  printf '%s\n' "Original interface gone; using detected Wi-Fi interface: \${IFACE:-<none>}"
+fi
+
 run_or_mark systemctl restart NetworkManager
 sleep 8
 nmcli radio wifi on 2>/dev/null || true
-nmcli device set "\$IFACE" managed yes 2>/dev/null || true
+if [ -n "\$IFACE" ]; then
+  nmcli device set "\$IFACE" managed yes 2>/dev/null || true
+fi
 
 if [ -n "\$ORIGINAL_AUTOCONNECT" ]; then
   run_or_mark nm_source_modify connection.autoconnect "\$ORIGINAL_AUTOCONNECT"
@@ -622,7 +722,6 @@ run_or_mark nm_source_modify 802-11-wireless.bssid "\$ORIGINAL_BSSID"
 run_or_mark nm_source_up
 
 if [ "\$ROLLBACK_FAILED" -eq 0 ]; then
-  systemctl stop iwd.service 2>/dev/null || true
   printf '%s\n' "Rollback complete."
   exit 0
 fi
@@ -688,7 +787,9 @@ ORIGINAL_BSSID="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_C
 ORIGINAL_AUTOCONNECT="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" connection.autoconnect)"
 SOURCE_SSID="$(nm_connection_field_value "$SOURCE_CONNECTION_UUID" "$SOURCE_CONNECTION_NAME" 802-11-wireless.ssid | nm_unescape_colons)"
 SOURCE_SSID="${SOURCE_SSID:-$SOURCE_CONNECTION_NAME}"
+WIFI_DRIVER="${WIFI_DRIVER:-$(wifi_driver_for_iface "$IFACE")}"
 assert_single_wifi_profile_for_ssid "$SOURCE_SSID"
+warn_persistent_backend_configs
 choose_preferred_bssid
 if [ -z "$PREFERRED_BSSID" ]; then
   printf '%s\n' "Could not auto-detect a BSSID. Use --bssid <ap-bssid>." >&2
@@ -762,7 +863,12 @@ fi
 {
   printf '%s\n' "[$(date)] Starting iwd service"
 } >> "$LOG_FILE"
-systemctl start iwd.service >> "$LOG_FILE" 2>&1
+if ! systemctl start iwd.service >> "$LOG_FILE" 2>&1; then
+  BACKEND_TEST_STATUS="failed"
+  record_backend_test "iwd.service failed to start; aborted before any backend change"
+  ui_error "Failed to start iwd.service; aborting before changing the NetworkManager backend."
+  exit 1
+fi
 BACKEND_TEST_STATUS="iwd_started"
 record_backend_test "iwd service start requested"
 

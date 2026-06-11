@@ -90,8 +90,17 @@ upload="$(extract_speed_value Upload "$speed_file")"
   printf '| --- | ---: | ---: | ---: | --- |\n'
 } > "$summary_file"
 
+started_at="unknown"
+if [ -f "$RUN_DIR/run-start-date.txt" ]; then
+  started_at="$(tr '\n' ' ' < "$RUN_DIR/run-start-date.txt" | sed 's/[[:space:]]*$//')"
+fi
+
 {
   printf 'PRAGMA foreign_keys = ON;\n\n'
+  printf "INSERT OR IGNORE INTO runs (run_id, started_at, run_dir, notes) VALUES ('%s', '%s', '%s', 'created by summarize-network-run');\n" \
+    "$(sql_string "$RUN_ID")" \
+    "$(sql_string "$started_at")" \
+    "$(sql_string "$RUN_DIR")"
   printf "DELETE FROM speed_tests WHERE run_id = '%s' AND phase = '%s';\n" "$(sql_string "$RUN_ID")" "$(sql_string "$PHASE")"
   if [ -n "${speed_ping:-}" ] || [ -n "${download:-}" ] || [ -n "${upload:-}" ]; then
     printf "INSERT INTO speed_tests (run_id, phase, ping_ms, download_mbps, upload_mbps, source_file) VALUES ('%s', '%s', %s, %s, %s, '%s');\n" \

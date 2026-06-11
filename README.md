@@ -121,8 +121,11 @@ scripts/rollback-optimizations.sh
 Both scripts preflight required commands and print `apt install` hints for
 missing packages. They ask for sudo automatically before changing settings, then
 require a typed confirmation. Wi-Fi powersave is always kept disabled; rollback
-does not restore powersave defaults. When iwd is active, the apply script also
-uses sudo to persist iwd's `DriverQuirks.PowerSaveDisable` setting.
+does not restore powersave defaults and leaves iwd's
+`DriverQuirks.PowerSaveDisable` entry in `/etc/iwd/main.conf` in place (the
+apply run saves a backup at `logs/<run_id>/iwd-main.conf.before-powersave`).
+When iwd is active, the apply script also uses sudo to persist iwd's
+`DriverQuirks.PowerSaveDisable` setting.
 
 ## iwd Backend Test
 
@@ -135,6 +138,16 @@ drop while NetworkManager restarts.
 sudo apt install -y iwd
 ./scripts/test-iwd-backend.sh
 ```
+
+Warning: installing iwd on Ubuntu also installs
+`/usr/lib/NetworkManager/conf.d/iwd.conf` (`wifi.backend=iwd`), which silently
+switches NetworkManager's Wi-Fi backend to iwd at the next restart or reboot —
+independent of this test script. The test warns when it detects such a file,
+and its rollback pins `wifi.backend=wpa_supplicant` in
+`/etc/NetworkManager/conf.d/10-wifi-backend.conf` to neutralize it. Remove that
+pin file only if you intentionally want the iwd backend. If a rollback ever
+leaves the Wi-Fi interface missing (stopping iwd can delete the interface it
+created), the rollback script reloads the Wi-Fi driver module automatically.
 
 With a TTY, the script lets you select the test length and preferred BSSID, then
 requires typing `YES` before it restarts NetworkManager. For a short
@@ -162,6 +175,23 @@ to run if more than one saved profile uses the active SSID, then writes
 `iwd-rollback.sh` so the original backend and BSSID setting can be restored.
 If rollback fails, the existing profile is left in place and the script exits
 non-zero instead of reporting success.
+
+## Wi-Fi Interface Recovery
+
+If the Wi-Fi device disappears entirely (no Wi-Fi toggle in the desktop UI, no
+wifi device in `nmcli device status`) — for example after stopping iwd, which
+deletes the interface it created — run:
+
+```bash
+./scripts/recover-wifi-interface.sh
+```
+
+It stops iwd when it conflicts with the configured backend, reloads the Wi-Fi
+driver module, waits for the interface to reappear, and hands it back to
+NetworkManager. Use `--yes` to skip the typed confirmation, set
+`WIFI_DRIVER=<module>` if driver auto-detection fails, and set
+`CONNECTION_NAME=<profile>` to force a specific profile up instead of relying
+on autoconnect.
 
 ## Privacy
 

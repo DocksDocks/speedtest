@@ -97,6 +97,11 @@ This will roll back the network optimizations on:
 It will restore automatic DNS, clear the pinned BSSID, keep Wi-Fi power saving
 disabled, flush DNS cache, and restart Avahi/mDNS.
 
+By policy it does NOT touch /etc/iwd/main.conf: the apply script's
+[DriverQuirks] PowerSaveDisable entry stays so powersave remains disabled. The
+apply run saved a backup at logs/<run_id>/iwd-main.conf.before-powersave for
+manual restore.
+
 Type ROLLBACK to continue:
 EOF
 
@@ -118,6 +123,7 @@ fi
   printf '%s\n' "iw dev \"$IFACE\" get power_save"
   printf '%s\n' "resolvectl flush-caches"
   printf '%s\n' "runtime-unmask and restart avahi-daemon.socket avahi-daemon.service"
+  printf '%s\n' "leave /etc/iwd/main.conf DriverQuirks untouched (powersave stays disabled by policy)"
   printf '%s\n' ""
 } > "$RUN_DIR/rollback-optimizations.log"
 

@@ -1,6 +1,8 @@
 ---
 name: bash-diagnostics
 description: Use when adding or changing Bash scripts that collect network diagnostics, mutate NetworkManager settings, ingest logs, publish reports, or call sqlite3 in this speedtest repository.
+metadata:
+  updated: 2026-06-11
 ---
 
 # Bash Diagnostics Workflow
@@ -42,6 +44,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 - Use arrays for commands with optional arguments; do not use `eval`.
 - Quote variables unless deliberately using word splitting for documented lists.
 - Use `trap` for cleanup and rollback when a script creates temporary files or changes network state.
+- Daemons that own a Wi-Fi interface (iwd) can delete it on stop. Rollback or recovery flows must stop the daemon before restarting NetworkManager, then recover a missing interface by reloading the Wi-Fi driver module (`scripts/recover-wifi-interface.sh` is the standalone tool).
+- Backend switches must account for package-shipped NetworkManager configs: the Ubuntu iwd package installs `/usr/lib/NetworkManager/conf.d/iwd.conf` (`wifi.backend=iwd`). Pin the intended backend in `/etc/NetworkManager/conf.d/` with a low-sort prefix (`10-wifi-backend.conf`) so test-specific `90-` files can still override it.
 
 ## Collection Rules
 

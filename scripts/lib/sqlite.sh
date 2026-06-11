@@ -54,6 +54,47 @@ sqlite_add_column_if_missing() {
   fi
 }
 
+speedtest_migrate_runs_table() {
+  local db_path="$1"
+  local legacy_not_null
+
+  # Older databases created runs with NOT NULL report_path/connection_name/
+  # gateway/mtu and no defaults; CREATE TABLE IF NOT EXISTS never migrates
+  # them, which makes ingest's 4-column INSERT fail. Rebuild to the current
+  # shape from db/schema/001_core.sql.
+  legacy_not_null="$(sqlite_scalar "$db_path" "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name = 'report_path' AND \"notnull\" = 1;")"
+  if [ "$legacy_not_null" = "0" ]; then
+    return 0
+  fi
+
+  "$(speedtest_sqlite_bin)" \
+    -batch \
+    -bail \
+    -cmd ".timeout 5000" \
+    "$db_path" <<'SQL'
+PRAGMA foreign_keys = OFF;
+BEGIN IMMEDIATE;
+CREATE TABLE runs_migrate_new (
+  run_id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  run_dir TEXT NOT NULL,
+  report_path TEXT,
+  connection_name TEXT,
+  interface_name TEXT,
+  gateway TEXT,
+  mtu INTEGER,
+  approval_status TEXT NOT NULL DEFAULT 'not applied',
+  notes TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO runs_migrate_new (run_id, started_at, run_dir, report_path, connection_name, interface_name, gateway, mtu, approval_status, notes)
+SELECT run_id, started_at, run_dir, report_path, connection_name, interface_name, gateway, mtu, approval_status, notes FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_migrate_new RENAME TO runs;
+COMMIT;
+PRAGMA foreign_keys = ON;
+SQL
+}
+
 speedtest_init_schema() {
   local db_path="${1:-$(speedtest_default_db)}"
   local root
@@ -76,6 +117,8 @@ speedtest_init_schema() {
       -cmd ".timeout 5000" \
       "$db_path" < "$sql_file" >/dev/null
   done
+
+  speedtest_migrate_runs_table "$db_path"
 
   sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "base_run_id" "base_run_id TEXT REFERENCES runs(run_id) ON DELETE SET NULL"
   sqlite_add_column_if_missing "$db_path" "wifi_backend_tests" "connection_uuid" "connection_uuid TEXT"
